@@ -30,11 +30,19 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026: the
+   user's terminal is an STMFrontend (Casement's terminal view) instead of
+   the process's tty, so there is no termios, no window size ioctl and no
+   signals: input, size changes and the request to quit arrive as frontend
+   events. The window size is given to the constructor, and shutdown()
+   returns the message mosh-client would print instead of printing it.
+   Messages are UTF-32 strings, as wchar_t has 16 bits on Windows. */
+
 #ifndef STM_CLIENT_HPP
 #define STM_CLIENT_HPP
 
-#include <sys/ioctl.h>
-#include <termios.h>
+#include <deque>
+#include <stdexcept>
 #include <string>
 
 #include "completeterminal.h"
@@ -42,6 +50,33 @@
 #include "user.h"
 #include "shared.h"
 #include "terminaloverlay.h"
+
+/* The user's side: what mosh-client reads from and writes to its tty. */
+class STMFrontend {
+public:
+  enum EventType {
+    INPUT,     /* bytes the user's terminal produced */
+    RESIZE,    /* the terminal has a new size */
+    SHUTDOWN   /* end the session, as SIGTERM does */
+  };
+
+  struct Event {
+    EventType type;
+    std::string bytes;
+    int width, height;
+  };
+
+  virtual ~STMFrontend() {}
+
+  /* Bytes for the user's terminal. */
+  virtual void write( const std::string &bytes ) = 0;
+
+  /* An event object that is signalled when events are waiting. */
+  virtual HANDLE event( void ) = 0;
+
+  /* The events that arrived since the last call, oldest first. */
+  virtual std::deque< Event > take_events( void ) = 0;
+};
 
 class STMClient {
 private:
@@ -53,11 +88,10 @@ private:
   int escape_pass_key;
   int escape_pass_key2;
   bool escape_requires_lf;
-  std::wstring escape_key_help;
+  std::u32string escape_key_help;
 
-  struct termios saved_termios, raw_termios;
-
-  struct winsize window_size;
+  STMFrontend &frontend;
+  int window_width, window_height;
 
   Terminal::Framebuffer local_framebuffer, new_state;
   Overlay::OverlayManager overlays;
@@ -66,39 +100,32 @@ private:
   NetworkPointer network;
   Terminal::Display display;
 
-  std::wstring connecting_notification;
+  std::u32string connecting_notification;
   bool repaint_requested, lf_entered, quit_sequence_started;
   bool clean_shutdown;
   unsigned int verbose;
 
   void main_init( void );
   void process_network_input( void );
-  bool process_user_input( int fd );
-  bool process_resize( void );
+  bool process_user_input( const std::string &bytes );
+  bool process_resize( int width, int height );
 
   void output_new_frame( void );
 
-  bool still_connecting( void ) const
-  {
-    /* Initially, network == NULL */
-    return network && ( network->get_remote_state_num() == 0 );
-  }
-
-  void resume( void ); /* restore state after SIGCONT */
-
 public:
-  STMClient( const char *s_ip, const char *s_port, const char *s_key, const char *predict_mode, unsigned int s_verbose, const char *predict_overwrite )
+  STMClient( STMFrontend &s_frontend, int s_width, int s_height,
+             const char *s_ip, const char *s_port, const char *s_key, const char *predict_mode, unsigned int s_verbose, const char *predict_overwrite )
     : ip( s_ip ? s_ip : "" ), port( s_port ? s_port : "" ),
     key( s_key ? s_key : "" ),
     escape_key( 0x1E ), escape_pass_key( '^' ), escape_pass_key2( '^' ),
-    escape_requires_lf( false ), escape_key_help( L"?" ),
-      saved_termios(), raw_termios(),
-      window_size(),
+    escape_requires_lf( false ), escape_key_help( U"?" ),
+      frontend( s_frontend ),
+      window_width( s_width ), window_height( s_height ),
       local_framebuffer( 1, 1 ),
       new_state( 1, 1 ),
       overlays(),
       network(),
-      display( true ), /* use TERM environment var to initialize display */
+      display( true ), /* fixed xterm-256color capabilities */
       connecting_notification(),
       repaint_requested( false ),
       lf_entered( false ),
@@ -116,8 +143,7 @@ public:
       } else if ( !strcmp( predict_mode, "experimental" ) ) {
 	overlays.get_prediction_engine().set_display_preference( Overlay::PredictionEngine::Experimental );
       } else {
-	fprintf( stderr, "Unknown prediction mode %s.\n", predict_mode );
-	exit( 1 );
+	throw std::invalid_argument( std::string( "Unknown prediction mode " ) + predict_mode );
       }
     }
     if ( predict_overwrite && !strcmp( predict_overwrite, "yes" ) ) {
@@ -126,8 +152,22 @@ public:
   }
 
   void init( void );
-  void shutdown( void );
+  /* Restores the user's terminal and returns what mosh-client would print
+     on the way out (empty after a clean shutdown). */
+  std::string shutdown( void );
   bool main( void );
+
+  bool still_connecting( void ) const
+  {
+    /* Initially, network == NULL */
+    return network && ( network->get_remote_state_num() == 0 );
+  }
+
+  /* The server ended the session (its shell exited) and we acknowledged. */
+  bool server_ended( void ) const
+  {
+    return network && network->counterparty_shutdown_ack_sent();
+  }
 
   /* unused */
   STMClient( const STMClient & );

@@ -30,13 +30,16 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   characters are char32_t, since wchar_t has 16 bits on Windows. */
+
 #include "parserstate.h"
 #include "parserstatefamily.h"
 #include "shared.h"
 
 using namespace Parser;
 
-Transition State::anywhere_rule( wchar_t ch ) const
+Transition State::anywhere_rule( char32_t ch ) const
 {
   if ( (ch == 0x18) || (ch == 0x1A)
        || ((0x80 <= ch) && (ch <= 0x8F))
@@ -60,7 +63,7 @@ Transition State::anywhere_rule( wchar_t ch ) const
   return Transition(( State * )NULL, ActionPointer() ); /* don't allocate an Ignore action */
 }
 
-Transition State::input( wchar_t ch ) const
+Transition State::input( char32_t ch ) const
 {
   /* Check for immediate transitions. */
   Transition anywhere = anywhere_rule( ch );
@@ -77,20 +80,20 @@ Transition State::input( wchar_t ch ) const
   return ret;
 }
 
-static bool C0_prime( wchar_t ch )
+static bool C0_prime( char32_t ch )
 {
   return (ch <= 0x17)
     || (ch == 0x19)
     || ( (0x1C <= ch) && (ch <= 0x1F) );
 }
 
-static bool GLGR ( wchar_t ch )
+static bool GLGR ( char32_t ch )
 {
   return ( (0x20 <= ch) && (ch <= 0x7F) ) /* GL area */
     || ( (0xA0 <= ch) && (ch <= 0xFF) ); /* GR area */
 }
 
-Transition Ground::input_state_rule( wchar_t ch ) const
+Transition Ground::input_state_rule( char32_t ch ) const
 {
   if ( C0_prime( ch ) ) {
     return Transition( shared::make_shared< Execute >() );
@@ -108,7 +111,7 @@ ActionPointer Escape::enter( void ) const
   return shared::make_shared< Clear >();
 }
 
-Transition Escape::input_state_rule( wchar_t ch ) const
+Transition Escape::input_state_rule( char32_t ch ) const
 {
   if ( C0_prime( ch ) ) {
     return Transition( shared::make_shared< Execute >() );
@@ -146,7 +149,7 @@ Transition Escape::input_state_rule( wchar_t ch ) const
   return Transition();
 }
 
-Transition Escape_Intermediate::input_state_rule( wchar_t ch ) const
+Transition Escape_Intermediate::input_state_rule( char32_t ch ) const
 {
   if ( C0_prime( ch ) ) {
     return Transition( shared::make_shared< Execute >() );
@@ -168,7 +171,7 @@ ActionPointer CSI_Entry::enter( void ) const
   return shared::make_shared< Clear >();
 }
 
-Transition CSI_Entry::input_state_rule( wchar_t ch ) const
+Transition CSI_Entry::input_state_rule( char32_t ch ) const
 {
   if ( C0_prime( ch ) ) {
     return Transition( shared::make_shared< Execute >() );
@@ -198,7 +201,7 @@ Transition CSI_Entry::input_state_rule( wchar_t ch ) const
   return Transition();
 }
 
-Transition CSI_Param::input_state_rule( wchar_t ch ) const
+Transition CSI_Param::input_state_rule( char32_t ch ) const
 {
   if ( C0_prime( ch ) ) {
     return Transition( shared::make_shared< Execute >() );
@@ -223,7 +226,7 @@ Transition CSI_Param::input_state_rule( wchar_t ch ) const
   return Transition();
 }
 
-Transition CSI_Intermediate::input_state_rule( wchar_t ch ) const
+Transition CSI_Intermediate::input_state_rule( char32_t ch ) const
 {
   if ( C0_prime( ch ) ) {
     return Transition( shared::make_shared< Execute >() );
@@ -244,7 +247,7 @@ Transition CSI_Intermediate::input_state_rule( wchar_t ch ) const
   return Transition();
 }
 
-Transition CSI_Ignore::input_state_rule( wchar_t ch ) const
+Transition CSI_Ignore::input_state_rule( char32_t ch ) const
 {
   if ( C0_prime( ch ) ) {
     return Transition( shared::make_shared< Execute >() );
@@ -262,7 +265,7 @@ ActionPointer DCS_Entry::enter( void ) const
   return shared::make_shared< Clear >();
 }
 
-Transition DCS_Entry::input_state_rule( wchar_t ch ) const
+Transition DCS_Entry::input_state_rule( char32_t ch ) const
 {
   if ( (0x20 <= ch) && (ch <= 0x2F) ) {
     return Transition( shared::make_shared< Collect >(), &family->s_DCS_Intermediate );
@@ -287,7 +290,7 @@ Transition DCS_Entry::input_state_rule( wchar_t ch ) const
   return Transition();
 }
 
-Transition DCS_Param::input_state_rule( wchar_t ch ) const
+Transition DCS_Param::input_state_rule( char32_t ch ) const
 {
   if ( ( (0x30 <= ch) && (ch <= 0x39) ) || ( ch == 0x3B ) ) {
     return Transition( shared::make_shared< Param >() );
@@ -308,7 +311,7 @@ Transition DCS_Param::input_state_rule( wchar_t ch ) const
   return Transition();
 }
 
-Transition DCS_Intermediate::input_state_rule( wchar_t ch ) const
+Transition DCS_Intermediate::input_state_rule( char32_t ch ) const
 {
   if ( (0x20 <= ch) && (ch <= 0x2F) ) {
     return Transition( shared::make_shared< Collect >() );
@@ -335,7 +338,7 @@ ActionPointer DCS_Passthrough::exit( void ) const
   return shared::make_shared< Unhook >();
 }
 
-Transition DCS_Passthrough::input_state_rule( wchar_t ch ) const
+Transition DCS_Passthrough::input_state_rule( char32_t ch ) const
 {
   if ( C0_prime( ch ) || ( (0x20 <= ch) && (ch <= 0x7E) ) ) {
     return Transition( shared::make_shared< Put >() );
@@ -348,7 +351,7 @@ Transition DCS_Passthrough::input_state_rule( wchar_t ch ) const
   return Transition();
 }
 
-Transition DCS_Ignore::input_state_rule( wchar_t ch ) const
+Transition DCS_Ignore::input_state_rule( char32_t ch ) const
 {
   if ( ch == 0x9C ) {
     return Transition( &family->s_Ground );
@@ -367,7 +370,7 @@ ActionPointer OSC_String::exit( void ) const
   return shared::make_shared< OSC_End >();
 }
 
-Transition OSC_String::input_state_rule( wchar_t ch ) const
+Transition OSC_String::input_state_rule( char32_t ch ) const
 {
   if ( (0x20 <= ch) && (ch <= 0x7F) ) {
     return Transition( shared::make_shared< OSC_Put >() );
@@ -380,7 +383,7 @@ Transition OSC_String::input_state_rule( wchar_t ch ) const
   return Transition();
 }
 
-Transition SOS_PM_APC_String::input_state_rule( wchar_t ch ) const
+Transition SOS_PM_APC_String::input_state_rule( char32_t ch ) const
 {
   if ( ch == 0x9C ) {
     return Transition( &family->s_Ground );

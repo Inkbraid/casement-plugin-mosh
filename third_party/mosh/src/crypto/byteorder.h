@@ -30,6 +30,9 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   byte swapping with the C runtime's intrinsics on Windows. */
+
 #ifndef BYTEORDER_HPP
 #define BYTEORDER_HPP
 
@@ -55,6 +58,18 @@
 # define be64toh OSSwapBigToHostInt64
 # define htobe16 OSSwapHostToBigInt16
 # define be16toh OSSwapBigToHostInt16
+
+#elif defined(_WIN32)
+
+/* Windows runs only on little-endian processors. */
+
+#include <stdint.h>
+#include <stdlib.h>
+
+inline uint64_t htobe64( uint64_t x ) { return _byteswap_uint64( x ); }
+inline uint64_t be64toh( uint64_t x ) { return _byteswap_uint64( x ); }
+inline uint16_t htobe16( uint16_t x ) { return _byteswap_ushort( x ); }
+inline uint16_t be16toh( uint16_t x ) { return _byteswap_ushort( x ); }
 
 #else
 

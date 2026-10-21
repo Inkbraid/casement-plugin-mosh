@@ -30,6 +30,11 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   messages are UTF-32 strings (wchar_t has 16 bits on Windows) and
+   network errors are converted from UTF-8 instead of with swprintf(),
+   whose "%s" means different things to different C libraries. */
+
 #ifndef TERMINAL_OVERLAY_HPP
 #define TERMINAL_OVERLAY_HPP
 
@@ -37,6 +42,7 @@
 #include "network.h"
 #include "transportsender.h"
 #include "parser.h"
+#include "unicode.h"
 
 #include <vector>
 #include <limits.h>
@@ -47,7 +53,7 @@ namespace Overlay {
   using std::deque;
   using std::list;
   using std::vector;
-  using std::wstring;
+  using std::u32string;
 
   enum Validity {
     Pending,
@@ -142,7 +148,7 @@ namespace Overlay {
     uint64_t last_word_from_server;
     uint64_t last_acked_state;
     string escape_key_string;
-    wstring message;
+    u32string message;
     bool message_is_network_error;
     uint64_t message_expiration;
     bool show_quit_keystroke;
@@ -154,12 +160,12 @@ namespace Overlay {
   public:
     void adjust_message( void );
     void apply( Framebuffer &fb ) const;
-    const wstring &get_notification_string( void ) const { return message; }
+    const u32string &get_notification_string( void ) const { return message; }
     void server_heard( uint64_t s_last_word ) { last_word_from_server = s_last_word; }
     void server_acked( uint64_t s_last_acked ) { last_acked_state = s_last_acked; }
     int wait_time( void ) const;
 
-    void set_notification_string( const wstring &s_message, bool permanent = false, bool s_show_quit_keystroke = true )
+    void set_notification_string( const u32string &s_message, bool permanent = false, bool s_show_quit_keystroke = true )
     {
       message = s_message;
       if ( permanent ) {
@@ -180,10 +186,7 @@ namespace Overlay {
 
     void set_network_error( const std::string &s )
     {
-      wchar_t tmp[ 128 ];
-      swprintf( tmp, 128, L"%s", s.c_str() );
-
-      message = tmp;
+      message = mosh_utf8_to_u32( s );
       message_is_network_error = true;
       message_expiration = timestamp() + Network::ACK_INTERVAL + 100;
     }
@@ -314,7 +317,7 @@ namespace Overlay {
   public:
     void apply( Framebuffer &fb ) const { fb.prefix_window_title( prefix ); }
     TitleEngine() : prefix() {}
-    void set_prefix( const wstring &s );
+    void set_prefix( const u32string &s );
   };
 
   /* the overlay manager */
@@ -330,7 +333,7 @@ namespace Overlay {
     NotificationEngine & get_notification_engine( void ) { return notifications; }
     PredictionEngine & get_prediction_engine( void ) { return predictions; }
 
-    void set_title_prefix( const wstring &s ) { title.set_prefix( s ); }
+    void set_title_prefix( const u32string &s ) { title.set_prefix( s ); }
 
     OverlayManager() : notifications(), predictions(), title() {}
 

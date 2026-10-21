@@ -30,6 +30,11 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   characters are char32_t, since wchar_t has 16 bits on Windows, and
+   UTF-8 is encoded by mosh_utf8_append() instead of wcrtomb(), which
+   depends on the process's locale. shared_ptr::unique() is deprecated. */
+
 #ifndef TERMINALFB_HPP
 #define TERMINALFB_HPP
 
@@ -43,6 +48,7 @@
 #include <list>
 
 #include "shared.h"
+#include "unicode.h"
 
 /* Terminal framebuffer */
 
@@ -147,39 +153,29 @@ namespace Terminal {
     bool compare( const Cell &other ) const;
 
     // Is this a printing ISO 8859-1 character?
-    static bool isprint_iso8859_1( const wchar_t c )
+    static bool isprint_iso8859_1( const char32_t c )
     {
       return ( c <= 0xff && c >= 0xa0 ) || ( c <= 0x7e && c >= 0x20 );
     }
 
-   static void append_to_str( std::string &dest, const wchar_t c )
+   static void append_to_str( std::string &dest, const char32_t c )
     {
       /* ASCII?  Cheat. */
       if ( static_cast<uint32_t>(c) <= 0x7f ) {
 	dest.push_back( static_cast<char>(c) );
 	return;
       }
-      static mbstate_t ps = mbstate_t();
-      char tmp[MB_LEN_MAX];
-      size_t ignore = wcrtomb(NULL, 0, &ps);
-      (void)ignore;
-      size_t len = wcrtomb(tmp, c, &ps);
-      dest.append( tmp, len );
+      mosh_utf8_append( dest, c );
     }
 
-    void append( const wchar_t c )
+    void append( const char32_t c )
     {
       /* ASCII?  Cheat. */
       if ( static_cast<uint32_t>(c) <= 0x7f ) {
 	contents.push_back( static_cast<char>(c) );
 	return;
       }
-      static mbstate_t ps = mbstate_t();
-      char tmp[MB_LEN_MAX];
-      size_t ignore = wcrtomb(NULL, 0, &ps);
-      (void)ignore;
-      size_t len = wcrtomb(tmp, c, &ps);
-      contents.insert( contents.end(), tmp, tmp+len );
+      mosh_utf8_append( contents, c );
     }
 
     void print_grapheme( std::string &output ) const
@@ -371,7 +367,7 @@ namespace Terminal {
     // are equal, then the rows are obviously identical.
     // * If no row is shared, the frame has not been modified.
   public:
-    typedef std::vector<wchar_t> title_type;
+    typedef std::vector<char32_t> title_type;
     typedef shared_ptr<Row> row_pointer;
     typedef std::vector<row_pointer> rows_type; /* can be either std::vector or std::deque */
 
@@ -421,7 +417,7 @@ namespace Terminal {
       if ( row == -1 ) row = ds.get_cursor_row();
       row_pointer &mutable_row = rows.at( row );
       // If the row is shared, copy it.
-      if (!mutable_row.unique()) {
+      if (mutable_row.use_count() != 1) {
 	mutable_row = make_shared<Row>( *mutable_row );
       }
       return mutable_row.get();

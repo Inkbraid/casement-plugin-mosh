@@ -30,100 +30,49 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026: see
+   stmclient.h. The main loop waits with WaitForMultipleObjects() on an
+   event that every UDP socket signals (WSAEventSelect) and on the
+   frontend's event, and finds the readable sockets with WSAPoll(), where
+   mosh-client used pselect() on the sockets, stdin and signals. There is
+   no suspend (Ctrl-Z after the escape key): the plugin has no shell to
+   return to. */
+
 #include "config.h"
 
-#include <err.h>
 #include <errno.h>
-#include <locale.h>
 #include <string.h>
-#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/ioctl.h>
-#include <sys/types.h>
-#include <pwd.h>
-#include <signal.h>
-#include <time.h>
+#include <vector>
 
-#if HAVE_PTY_H
-#include <pty.h>
-#elif HAVE_UTIL_H
-#include <util.h>
-#endif
+#include <winsock2.h>
+#include <windows.h>
 
 #include "stmclient.h"
-#include "swrite.h"
 #include "completeterminal.h"
 #include "user.h"
 #include "fatal_assert.h"
-#include "locale_utils.h"
-#include "pty_compat.h"
-#include "select.h"
 #include "timestamp.h"
+#include "unicode.h"
 
 #include "networktransport-impl.h"
 
-using std::wstring;
+using std::u32string;
 
-void STMClient::resume( void )
+static u32string u32( const std::string &s )
 {
-  /* Restore termios state */
-  if ( tcsetattr( STDIN_FILENO, TCSANOW, &raw_termios ) < 0 ) {
-      perror( "tcsetattr" );
-      exit( 1 );
-  }
-
-  /* Put terminal in application-cursor-key mode */
-  swrite( STDOUT_FILENO, display.open().c_str() );
-
-  /* Flag that outer terminal state is unknown */
-  repaint_requested = true;
+  return mosh_utf8_to_u32( s );
 }
 
 void STMClient::init( void )
 {
-  if ( !is_utf8_locale() ) {
-    LocaleVar native_ctype = get_ctype();
-    string native_charset( locale_charset() );
-
-    fprintf( stderr, "mosh-client needs a UTF-8 native locale to run.\n\n"
-	     "Unfortunately, the client's environment (%s) specifies\n"
-	     "the character set \"%s\".\n\n",
-	     native_ctype.str().c_str(), native_charset.c_str() );
-    int unused __attribute((unused)) = system( "locale" );
-    exit( 1 );
-  }
-
-  /* Verify terminal configuration */
-  if ( tcgetattr( STDIN_FILENO, &saved_termios ) < 0 ) {
-    perror( "tcgetattr" );
-    exit( 1 );
-  }
-
-  /* Put terminal driver in raw mode */
-  raw_termios = saved_termios;
-
-#ifdef HAVE_IUTF8
-  if ( !(raw_termios.c_iflag & IUTF8) ) {
-    //    fprintf( stderr, "Warning: Locale is UTF-8 but termios IUTF8 flag not set. Setting IUTF8 flag.\n" );
-    /* Probably not really necessary since we are putting terminal driver into raw mode anyway. */
-    raw_termios.c_iflag |= IUTF8;
-  }
-#endif /* HAVE_IUTF8 */
-
-  cfmakeraw( &raw_termios );
-
-  if ( tcsetattr( STDIN_FILENO, TCSANOW, &raw_termios ) < 0 ) {
-      perror( "tcsetattr" );
-      exit( 1 );
-  }
-
   /* Put terminal in application-cursor-key mode */
-  swrite( STDOUT_FILENO, display.open().c_str() );
+  frontend.write( display.open() );
 
   /* Add our name to window title */
   if ( !getenv( "MOSH_TITLE_NOPREFIX" ) ) {
-    overlays.set_title_prefix( wstring( L"[mosh] " ) );
+    overlays.set_title_prefix( u32string( U"[mosh] " ) );
   }
 
   /* Set terminal escape key. */
@@ -187,81 +136,60 @@ void STMClient::init( void )
     }
     string tmp;
     tmp = string( escape_pass_name_buf );
-    wstring escape_pass_name = std::wstring(tmp.begin(), tmp.end());
+    u32string escape_pass_name = u32( tmp );
     tmp = string( escape_key_name_buf );
-    wstring escape_key_name = std::wstring(tmp.begin(), tmp.end());
-    escape_key_help = L"Commands: Ctrl-Z suspends, \".\" quits, " + escape_pass_name + L" gives literal " + escape_key_name;
+    u32string escape_key_name = u32( tmp );
+    escape_key_help = U"Commands: \".\" quits, " + escape_pass_name + U" gives literal " + escape_key_name;
     overlays.get_notification_engine().set_escape_key_string( tmp );
   }
-  wchar_t tmp[ 128 ];
-  swprintf( tmp, 128, L"Nothing received from server on UDP port %s.", port.c_str() );
-  connecting_notification = wstring( tmp );
+  connecting_notification = u32( "Nothing received from server on UDP port " + port + "." );
 }
 
-void STMClient::shutdown( void )
+std::string STMClient::shutdown( void )
 {
   /* Restore screen state */
-  overlays.get_notification_engine().set_notification_string( wstring( L"" ) );
+  overlays.get_notification_engine().set_notification_string( u32string( U"" ) );
   overlays.get_notification_engine().server_heard( timestamp() );
-  overlays.set_title_prefix( wstring( L"" ) );
+  overlays.set_title_prefix( u32string( U"" ) );
   output_new_frame();
 
-  /* Restore terminal and terminal-driver state */
-  swrite( STDOUT_FILENO, display.close().c_str() );
-  
-  if ( tcsetattr( STDIN_FILENO, TCSANOW, &saved_termios ) < 0 ) {
-    perror( "tcsetattr" );
-    exit( 1 );
-  }
+  /* Restore terminal state */
+  frontend.write( display.close() );
 
   if ( still_connecting() ) {
-    fprintf( stderr, "\nmosh did not make a successful connection to %s:%s.\n"
-	     "Please verify that UDP port %s is not firewalled and can reach the server.\n\n"
-	     "(By default, mosh uses a UDP port between 60000 and 61000. The -p option\n"
-	     "selects a specific UDP port number.)\n", ip.c_str(), port.c_str(), port.c_str() );
+    return "mosh did not make a successful connection to " + ip + ":" + port + ".\n"
+      "Please verify that UDP port " + port + " is not firewalled and can reach the server.\n\n"
+      "(By default, mosh uses a UDP port between 60000 and 61000. The -p option\n"
+      "selects a specific UDP port number.)\n";
   } else if ( network && !clean_shutdown ) {
-    fputs( "\n\nmosh did not shut down cleanly. Please note that the\n"
-	   "mosh-server process may still be running on the server.\n", stderr );
+    return "mosh did not shut down cleanly. Please note that the\n"
+      "mosh-server process may still be running on the server.\n";
   }
+  return std::string();
 }
 
 void STMClient::main_init( void )
 {
-  Select &sel = Select::get_instance();
-  sel.add_signal( SIGWINCH );
-  sel.add_signal( SIGTERM );
-  sel.add_signal( SIGINT );
-  sel.add_signal( SIGHUP );
-  sel.add_signal( SIGPIPE );
-  sel.add_signal( SIGCONT );
-
-  /* get initial window size */
-  if ( ioctl( STDIN_FILENO, TIOCGWINSZ, &window_size ) < 0 ) {
-    perror( "ioctl TIOCGWINSZ" );
-    return;
-  }  
-
   /* local state */
-  local_framebuffer = Terminal::Framebuffer( window_size.ws_col, window_size.ws_row );
+  local_framebuffer = Terminal::Framebuffer( window_width, window_height );
   new_state = Terminal::Framebuffer( 1, 1 );
 
   /* initialize screen */
   string init = display.new_frame( false, local_framebuffer, local_framebuffer );
-  swrite( STDOUT_FILENO, init.data(), init.size() );
+  frontend.write( init );
 
   /* open network */
   Network::UserStream blank;
-  Terminal::Complete local_terminal( window_size.ws_col, window_size.ws_row );
+  Terminal::Complete local_terminal( window_width, window_height );
   network = NetworkPointer( new NetworkType( blank, local_terminal, key.c_str(), ip.c_str(), port.c_str() ) );
 
   network->set_send_delay( 1 ); /* minimal delay on outgoing keystrokes */
 
   /* tell server the size of the terminal */
-  network->get_current_state().push_back( Parser::Resize( window_size.ws_col, window_size.ws_row ) );
+  network->get_current_state().push_back( Parser::Resize( window_width, window_height ) );
 
   /* be noisy as necessary */
   network->set_verbose( verbose );
-  Select::set_verbose( verbose );
 }
 
 void STMClient::output_new_frame( void )
@@ -280,7 +208,9 @@ void STMClient::output_new_frame( void )
   const string diff( display.new_frame( !repaint_requested,
 					local_framebuffer,
 					new_state ) );
-  swrite( STDOUT_FILENO, diff.data(), diff.size() );
+  if ( !diff.empty() ) {
+    frontend.write( diff );
+  }
 
   repaint_requested = false;
 
@@ -300,19 +230,10 @@ void STMClient::process_network_input( void )
   overlays.get_prediction_engine().set_local_frame_late_acked( network->get_latest_remote_state().state.get_echo_ack() );
 }
 
-bool STMClient::process_user_input( int fd )
+bool STMClient::process_user_input( const std::string &bytes )
 {
-  const int buf_size = 16384;
-  char buf[ buf_size ];
-
-  /* fill buffer if possible */
-  ssize_t bytes_read = read( fd, buf, buf_size );
-  if ( bytes_read == 0 ) { /* EOF */
-    return false;
-  } else if ( bytes_read < 0 ) {
-    perror( "read" );
-    return false;
-  }
+  const char *buf = bytes.data();
+  const int bytes_read = static_cast<int>( bytes.size() );
 
   NetworkType &net = *network;
 
@@ -337,28 +258,11 @@ bool STMClient::process_user_input( int fd )
     if ( quit_sequence_started ) {
       if ( the_byte == '.' ) { /* Quit sequence is Ctrl-^ . */
 	if ( net.has_remote_addr() && (!net.shutdown_in_progress()) ) {
-	  overlays.get_notification_engine().set_notification_string( wstring( L"Exiting on user request..." ), true );
+	  overlays.get_notification_engine().set_notification_string( u32string( U"Exiting on user request..." ), true );
 	  net.start_shutdown();
 	  return true;
 	}
 	return false;
-      } else if ( the_byte == 0x1a ) { /* Suspend sequence is escape_key Ctrl-Z */
-	/* Restore terminal and terminal-driver state */
-	swrite( STDOUT_FILENO, display.close().c_str() );
-
-	if ( tcsetattr( STDIN_FILENO, TCSANOW, &saved_termios ) < 0 ) {
-	  perror( "tcsetattr" );
-	  exit( 1 );
-	}
-
-	fputs( "\n\033[37;44m[mosh is suspended.]\033[m\n", stdout );
-
-	fflush( NULL );
-
-	/* actually suspend */
-	kill( 0, SIGSTOP );
-
-	resume();
       } else if ( (the_byte == escape_pass_key) || (the_byte == escape_pass_key2) ) {
 	/* Emulation sequence to type escape_key is escape_key +
 	   escape_pass_key (that is escape key without Ctrl) */
@@ -372,7 +276,7 @@ bool STMClient::process_user_input( int fd )
       quit_sequence_started = false;
 
       if ( overlays.get_notification_engine().get_notification_string() == escape_key_help ) {
-	overlays.get_notification_engine().set_notification_string( L"" );
+	overlays.get_notification_engine().set_notification_string( U"" );
       }
 
       continue;
@@ -397,16 +301,17 @@ bool STMClient::process_user_input( int fd )
   return true;
 }
 
-bool STMClient::process_resize( void )
+bool STMClient::process_resize( int width, int height )
 {
   /* get new size */
-  if ( ioctl( STDIN_FILENO, TIOCGWINSZ, &window_size ) < 0 ) {
-    perror( "ioctl TIOCGWINSZ" );
-    return false;
+  if ( width <= 0 || height <= 0 ) {
+    return true;
   }
+  window_width = width;
+  window_height = height;
   
   /* tell remote emulator */
-  Parser::Resize res( window_size.ws_col, window_size.ws_row );
+  Parser::Resize res( window_width, window_height );
   
   if ( !network->shutdown_in_progress() ) {
     network->get_current_state().push_back( res );
@@ -420,22 +325,115 @@ bool STMClient::process_resize( void )
   return true;
 }
 
+namespace {
+
+/* Waits for a datagram on any of the sockets, for frontend events, or for
+   timeout milliseconds, and tells which sockets are readable. All sockets
+   signal one event object, which WSAEventSelect() also uses to make them
+   non-blocking. */
+class Waiter {
+public:
+  Waiter() : network_event( WSACreateEvent() ), associated(), consecutive_polls( 0 )
+  {
+    if ( network_event == WSA_INVALID_EVENT ) {
+      throw Network::NetworkException( "WSACreateEvent", WSAGetLastError() );
+    }
+  }
+  ~Waiter() { WSACloseEvent( network_event ); }
+
+  /* Returns, for each socket, whether it has a datagram to read. */
+  std::vector< bool > wait( const std::vector< SOCKET > &socks, HANDLE frontend_event, int timeout )
+  {
+    /* Sockets the network layer created since the last call (it opens a new
+       one when it changes port). Closed sockets drop out by themselves. */
+    std::vector< SOCKET > still_open;
+    for ( std::vector< SOCKET >::const_iterator it = socks.begin(); it != socks.end(); it++ ) {
+      bool known = false;
+      for ( size_t i = 0; i < associated.size(); i++ ) {
+	if ( associated[ i ] == *it ) {
+	  known = true;
+	}
+      }
+      if ( !known && WSAEventSelect( *it, network_event, FD_READ ) != 0 ) {
+	throw Network::NetworkException( "WSAEventSelect", WSAGetLastError() );
+      }
+      still_open.push_back( *it );
+    }
+    associated = still_open;
+
+    /* As Select did: a run of zero timeouts means something is wrong, so
+       slow down rather than spin. */
+    if ( timeout == 0 && ++consecutive_polls >= MAX_POLLS ) {
+      timeout = 1;
+    } else if ( timeout != 0 ) {
+      consecutive_polls = 0;
+    }
+
+    /* Data that is already there doesn't always signal the event again, so
+       look before waiting. */
+    std::vector< bool > ready = readable( socks );
+    bool any = false;
+    for ( size_t i = 0; i < ready.size(); i++ ) {
+      any = any || ready[ i ];
+    }
+    if ( !any ) {
+      HANDLE handles[ 2 ] = { network_event, frontend_event };
+      DWORD ms = timeout < 0 ? INFINITE : static_cast<DWORD>( timeout );
+      DWORD r = WaitForMultipleObjects( 2, handles, FALSE, ms );
+      if ( r == WAIT_FAILED ) {
+	throw Network::NetworkException( "WaitForMultipleObjects", static_cast<int>( GetLastError() ) );
+      }
+      WSAResetEvent( network_event );
+      ready = readable( socks );
+    }
+
+    freeze_timestamp();
+
+    return ready;
+  }
+
+private:
+  static std::vector< bool > readable( const std::vector< SOCKET > &socks )
+  {
+    std::vector< bool > ready( socks.size(), false );
+    if ( socks.empty() ) {
+      return ready;
+    }
+    std::vector< WSAPOLLFD > fds( socks.size() );
+    for ( size_t i = 0; i < socks.size(); i++ ) {
+      fds[ i ].fd = socks[ i ];
+      fds[ i ].events = POLLRDNORM;
+      fds[ i ].revents = 0;
+    }
+    if ( WSAPoll( &fds[ 0 ], static_cast<ULONG>( fds.size() ), 0 ) == SOCKET_ERROR ) {
+      throw Network::NetworkException( "WSAPoll", WSAGetLastError() );
+    }
+    for ( size_t i = 0; i < socks.size(); i++ ) {
+      /* An error on the socket also counts: recvfrom() then reports it. */
+      ready[ i ] = ( fds[ i ].revents & ( POLLRDNORM | POLLERR | POLLHUP ) ) != 0;
+    }
+    return ready;
+  }
+
+  static const int MAX_POLLS = 10;
+
+  WSAEVENT network_event;
+  std::vector< SOCKET > associated;
+  int consecutive_polls;
+
+  Waiter( const Waiter & );
+  Waiter &operator=( const Waiter & );
+};
+
+}
+
 bool STMClient::main( void )
 {
-  /* initialize signal handling and structures */
+  /* initialize structures */
   main_init();
 
-  /* Drop unnecessary privileges */
-#ifdef HAVE_PLEDGE
-  /* OpenBSD pledge() syscall */
-  if ( pledge( "stdio inet tty", NULL )) {
-    perror( "pledge() failed" );
-    exit( 1 );
-  }
-#endif
-
-  /* prepare to poll for events */
-  Select &sel = Select::get_instance();
+  /* prepare to wait for events */
+  Waiter waiter;
 
   while ( 1 ) {
     try {
@@ -448,29 +446,15 @@ bool STMClient::main( void )
 	wait_time = std::min( 250, wait_time );
       }
 
-      /* poll for events */
-      /* network->fd() can in theory change over time */
-      sel.clear_fds();
-      std::vector< int > fd_list( network->fds() );
-      for ( std::vector< int >::const_iterator it = fd_list.begin();
-	    it != fd_list.end();
-	    it++ ) {
-	sel.add_fd( *it );
-      }
-      sel.add_fd( STDIN_FILENO );
-
-      int active_fds = sel.select( wait_time );
-      if ( active_fds < 0 ) {
-	perror( "select" );
-	break;
-      }
+      /* wait for events */
+      /* network->fds() can in theory change over time */
+      std::vector< SOCKET > fd_list( network->fds() );
+      std::vector< bool > ready = waiter.wait( fd_list, frontend.event(), wait_time );
 
       bool network_ready_to_read = false;
 
-      for ( std::vector< int >::const_iterator it = fd_list.begin();
-	    it != fd_list.end();
-	    it++ ) {
-	if ( sel.read( *it ) ) {
+      for ( size_t i = 0; i < ready.size(); i++ ) {
+	if ( ready[ i ] ) {
 	  /* packet received from the network */
 	  /* we only read one socket each run */
 	  network_ready_to_read = true;
@@ -480,35 +464,37 @@ bool STMClient::main( void )
       if ( network_ready_to_read ) {
 	process_network_input();
       }
-    
-      if ( sel.read( STDIN_FILENO ) && !process_user_input( STDIN_FILENO ) ) { /* input from the user needs to be fed to the network */
-	if ( !network->has_remote_addr() ) {
-	  break;
-	} else if ( !network->shutdown_in_progress() ) {
-	  overlays.get_notification_engine().set_notification_string( wstring( L"Exiting..." ), true );
-	  network->start_shutdown();
+
+      std::deque< STMFrontend::Event > events( frontend.take_events() );
+      bool quit_now = false;
+      for ( std::deque< STMFrontend::Event >::const_iterator it = events.begin();
+	    it != events.end();
+	    it++ ) {
+	if ( it->type == STMFrontend::INPUT ) {
+	  if ( !process_user_input( it->bytes ) ) { /* input from the user needs to be fed to the network */
+	    if ( !network->has_remote_addr() ) {
+	      quit_now = true;
+	    } else if ( !network->shutdown_in_progress() ) {
+	      overlays.get_notification_engine().set_notification_string( u32string( U"Exiting..." ), true );
+	      network->start_shutdown();
+	    }
+	  }
+	} else if ( it->type == STMFrontend::RESIZE ) {
+	  if ( !process_resize( it->width, it->height ) ) {
+	    return false;
+	  }
+	} else if ( it->type == STMFrontend::SHUTDOWN ) {
+	  /* shutdown request, as SIGTERM was */
+	  if ( !network->has_remote_addr() ) {
+	    quit_now = true;
+	  } else if ( !network->shutdown_in_progress() ) {
+	    overlays.get_notification_engine().set_notification_string( u32string( U"Exiting..." ), true );
+	    network->start_shutdown();
+	  }
 	}
       }
-
-      if ( sel.signal( SIGWINCH ) && !process_resize() ) { /* resize */
-	return false;
-      }
-
-      if ( sel.signal( SIGCONT ) ) {
-	resume();
-      }
-
-      if ( sel.signal( SIGTERM )
-           || sel.signal( SIGINT )
-           || sel.signal( SIGHUP )
-           || sel.signal( SIGPIPE ) ) {
-        /* shutdown signal */
-        if ( !network->has_remote_addr() ) {
-          break;
-        } else if ( !network->shutdown_in_progress() ) {
-          overlays.get_notification_engine().set_notification_string( wstring( L"Signal received, shutting down..." ), true );
-          network->start_shutdown();
-        }
+      if ( quit_now ) {
+	break;
       }
 
       /* quit if our shutdown has been acknowledged */
@@ -534,7 +520,7 @@ bool STMClient::main( void )
 	   && (timestamp() - network->get_latest_remote_state().timestamp > 250) ) {
 	if ( timestamp() - network->get_latest_remote_state().timestamp > 15000 ) {
 	  if ( !network->shutdown_in_progress() ) {
-	    overlays.get_notification_engine().set_notification_string( wstring( L"Timed out waiting for server..." ), true );
+	    overlays.get_notification_engine().set_notification_string( u32string( U"Timed out waiting for server..." ), true );
 	    network->start_shutdown();
 	  }
 	} else {
@@ -543,7 +529,7 @@ bool STMClient::main( void )
       } else if ( (network->get_remote_state_num() != 0)
 		  && (overlays.get_notification_engine().get_notification_string()
 		      == connecting_notification) ) {
-	overlays.get_notification_engine().set_notification_string( L"" );
+	overlays.get_notification_engine().set_notification_string( U"" );
       }
 
       network->tick();
@@ -560,21 +546,15 @@ bool STMClient::main( void )
         overlays.get_notification_engine().set_network_error( e.what() );
       }
 
-      struct timespec req;
-      req.tv_sec = 0;
-      req.tv_nsec = 200000000; /* 0.2 sec */
-      nanosleep( &req, NULL );
+      Sleep( 200 ); /* 0.2 sec */
       freeze_timestamp();
     } catch ( const Crypto::CryptoException &e ) {
       if ( e.fatal ) {
         throw;
       } else {
-        wchar_t tmp[ 128 ];
-        swprintf( tmp, 128, L"Crypto exception: %s", e.what() );
-        overlays.get_notification_engine().set_notification_string( wstring( tmp ) );
+        overlays.get_notification_engine().set_notification_string( u32( std::string( "Crypto exception: " ) + e.what() ) );
       }
     }
   }
   return clean_shutdown;
 }
-

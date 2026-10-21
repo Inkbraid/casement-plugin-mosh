@@ -30,6 +30,9 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   characters are char32_t, since wchar_t has 16 bits on Windows. */
+
 #ifndef PARSERSTATE_HPP
 #define PARSERSTATE_HPP
 
@@ -41,15 +44,15 @@ namespace Parser {
   class State
   {
   protected:
-    virtual Transition input_state_rule( wchar_t ch ) const = 0;
+    virtual Transition input_state_rule( char32_t ch ) const = 0;
     StateFamily *family;
 
   private:
-    Transition anywhere_rule( wchar_t ch ) const;
+    Transition anywhere_rule( char32_t ch ) const;
 
   public:
     void setfamily( StateFamily *s_family ) { family = s_family; }
-    Transition input( wchar_t ch ) const;
+    Transition input( char32_t ch ) const;
     virtual ActionPointer enter( void ) const { return shared::make_shared< Ignore >(); }
     virtual ActionPointer exit( void ) const { return shared::make_shared< Ignore >(); }
 
@@ -61,58 +64,58 @@ namespace Parser {
   };
 
   class Ground : public State {
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
 
   class Escape : public State {
     ActionPointer enter( void ) const;
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
 
   class Escape_Intermediate : public State {
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
 
   class CSI_Entry : public State {
     ActionPointer enter( void ) const;
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
   class CSI_Param : public State {
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
   class CSI_Intermediate : public State {
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
   class CSI_Ignore : public State {
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
   
   class DCS_Entry : public State {
     ActionPointer enter( void ) const;
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
   class DCS_Param : public State {
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
   class DCS_Intermediate : public State {
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
   class DCS_Passthrough : public State {
     ActionPointer enter( void ) const;
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
     ActionPointer exit( void ) const;
   };
   class DCS_Ignore : public State {
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
 
   class OSC_String : public State {
     ActionPointer enter( void ) const;
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
     ActionPointer exit( void ) const;
   };
   class SOS_PM_APC_String : public State {
-    Transition input_state_rule( wchar_t ch ) const;
+    Transition input_state_rule( char32_t ch ) const;
   };
 }
 

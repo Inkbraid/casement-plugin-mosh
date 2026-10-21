@@ -30,6 +30,9 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   characters are char32_t, since wchar_t has 16 bits on Windows. */
+
 #ifndef TERMINALDISPATCHER_HPP
 #define TERMINALDISPATCHER_HPP
 
@@ -86,7 +89,7 @@ namespace Terminal {
     bool parsed;
 
     std::string dispatch_chars;
-    std::vector<wchar_t> OSC_string; /* only used to set the window title */
+    std::vector<char32_t> OSC_string; /* only used to set the window title */
 
     void parse_params( void );
 
@@ -108,7 +111,7 @@ namespace Terminal {
 
     void dispatch( Function_Type type, const Parser::Action *act, Framebuffer *fb );
     std::string get_dispatch_chars( void ) const { return dispatch_chars; }
-    std::vector<wchar_t> get_OSC_string( void ) const { return OSC_string; }
+    std::vector<char32_t> get_OSC_string( void ) const { return OSC_string; }
 
     void OSC_put( const Parser::OSC_Put *act );
     void OSC_start( const Parser::OSC_Start *act );

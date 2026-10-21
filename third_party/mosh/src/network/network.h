@@ -30,13 +30,17 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   Winsock sockets (SOCKET handles, which are moved rather than duplicated)
+   and Windows error messages. */
+
 #ifndef NETWORK_HPP
 #define NETWORK_HPP
 
 #include <stdint.h>
 #include <deque>
-#include <sys/socket.h>
-#include <netinet/in.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <string>
 #include <math.h>
 #include <vector>
@@ -45,6 +49,7 @@
 #include <string.h>
 
 #include "crypto.h"
+#include "windows_port.h"
 
 using namespace Crypto;
 
@@ -62,9 +67,10 @@ namespace Network {
   private:
     string my_what;
   public:
+    /* s_errno is a Winsock error code (WSAGetLastError()). */
     NetworkException( string s_function="<none>", int s_errno=0)
       : function( s_function ), the_errno( s_errno ),
-        my_what(function + ": " + strerror(the_errno)) {}
+        my_what( the_errno ? function + ": " + mosh_error_string( the_errno ) : function ) {}
     const char *what() const throw () { return my_what.c_str(); }
     ~NetworkException() throw () {}
   };
@@ -149,15 +155,18 @@ namespace Network {
     class Socket
     {
     private:
-      int _fd;
+      SOCKET _fd;
 
     public:
-      int fd( void ) const { return _fd; }
+      SOCKET fd( void ) const { return _fd; }
       Socket( int family );
       ~Socket();
 
-      Socket( const Socket & other );
-      Socket & operator=( const Socket & other );
+      /* A Winsock handle can't be dup()ed, so sockets move. */
+      Socket( Socket && other );
+      Socket & operator=( Socket && other );
+      Socket( const Socket & other ) = delete;
+      Socket & operator=( const Socket & other ) = delete;
     };
 
     std::deque< Socket > socks;
@@ -193,12 +202,13 @@ namespace Network {
     Packet new_packet( const string &s_payload );
 
     void hop_port( void );
+    void bind_any( int family );
 
-    int sock( void ) const { assert( !socks.empty() ); return socks.back().fd(); }
+    SOCKET sock( void ) const { assert( !socks.empty() ); return socks.back().fd(); }
 
     void prune_sockets( void );
 
-    string recv_one( int sock_to_recv );
+    string recv_one( SOCKET sock_to_recv );
 
     void set_MTU( int family );
 
@@ -211,7 +221,7 @@ namespace Network {
 
     void send( const string & s );
     string recv( void );
-    const std::vector< int > fds( void ) const;
+    const std::vector< SOCKET > fds( void ) const;
     int get_MTU( void ) const { return MTU; }
 
     std::string port( void ) const;

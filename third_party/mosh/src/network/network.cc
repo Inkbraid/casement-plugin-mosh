@@ -30,19 +30,22 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   Winsock instead of BSD sockets. Sockets are non-blocking (Winsock has no
+   MSG_DONTWAIT), ICMP errors don't fail recvfrom() (SIO_UDP_CONNRESET),
+   client sockets are bound at once so they can be waited on before the
+   first send, and explicit congestion notification is left out: Windows
+   neither sets the ECN bits through IP_TOS nor reports them to recvfrom(). */
+
 #include "config.h"
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#ifdef HAVE_SYS_UIO_H
-#include <sys/uio.h>
-#endif
-#include <netdb.h>
-#include <netinet/in.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <mstcpip.h>
+#include <mswsock.h>
 #include <assert.h>
 #include <errno.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "dos_assert.h"
 #include "fatal_assert.h"
@@ -52,8 +55,8 @@
 
 #include "timestamp.h"
 
-#ifndef MSG_DONTWAIT
-#define MSG_DONTWAIT MSG_NONBLOCK
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW( IOC_VENDOR, 12 )
 #endif
 
 #ifndef AI_NUMERICSERV
@@ -121,6 +124,7 @@ void Connection::hop_port( void )
   setup();
   assert( remote_addr_len != 0 );
   socks.push_back( Socket( remote_addr.sa.sa_family ) );
+  bind_any( remote_addr.sa.sa_family );
 
   prune_sockets();
 }
@@ -149,34 +153,48 @@ void Connection::prune_sockets( void )
 }
 
 Connection::Socket::Socket( int family )
-  : _fd( socket( family, SOCK_DGRAM, 0 ) )
+  : _fd( socket( family, SOCK_DGRAM, IPPROTO_UDP ) )
 {
-  if ( _fd < 0 ) {
-    throw NetworkException( "socket", errno );
+  if ( _fd == INVALID_SOCKET ) {
+    throw NetworkException( "socket", WSAGetLastError() );
   }
 
-  /* Disable path MTU discovery */
-#ifdef HAVE_IP_MTU_DISCOVER
-  int flag = IP_PMTUDISC_DONT;
-  if ( setsockopt( _fd, IPPROTO_IP, IP_MTU_DISCOVER, &flag, sizeof flag ) < 0 ) {
-    throw NetworkException( "setsockopt", errno );
-  }
-#endif
+  /* Windows sends UDP datagrams without the "don't fragment" bit unless
+     asked, so path MTU discovery is already off. */
 
-  //  int dscp = 0x92; /* OS X does not have IPTOS_DSCP_AF42 constant */
-  int dscp = 0x02; /* ECN-capable transport only */
-  if ( setsockopt( _fd, IPPROTO_IP, IP_TOS, &dscp, sizeof dscp ) < 0 ) {
-    //    perror( "setsockopt( IP_TOS )" );
-  }
+  /* Without this, an ICMP "port unreachable" for an earlier datagram makes
+     the next recvfrom() fail with WSAECONNRESET. */
+  BOOL report = FALSE;
+  DWORD unused = 0;
+  WSAIoctl( _fd, SIO_UDP_CONNRESET, &report, sizeof report, NULL, 0, &unused, NULL, NULL );
 
-  /* request explicit congestion notification on received datagrams */
-#ifdef HAVE_IP_RECVTOS
-  int tosflag = true;
-  if ( setsockopt( _fd, IPPROTO_IP, IP_RECVTOS, &tosflag, sizeof tosflag ) < 0
-       && family == IPPROTO_IP ) { /* FreeBSD disallows this option on IPv6 sockets. */
-    perror( "setsockopt( IP_RECVTOS )" );
+  u_long nonblocking = 1;
+  if ( ioctlsocket( _fd, FIONBIO, &nonblocking ) != 0 ) {
+    int saved_error = WSAGetLastError();
+    closesocket( _fd );
+    throw NetworkException( "ioctlsocket", saved_error );
   }
-#endif
+}
+
+/* The client's sockets: an unbound UDP socket can't be waited on until the
+   first sendto() binds it, so bind it to an ephemeral port now. */
+void Connection::bind_any( int family )
+{
+  Addr local_addr;
+  memset( &local_addr, 0, sizeof( local_addr ) );
+  socklen_t local_addr_len;
+  if ( family == AF_INET6 ) {
+    local_addr.sin6.sin6_family = AF_INET6;
+    local_addr.sin6.sin6_addr = in6addr_any;
+    local_addr_len = sizeof( local_addr.sin6 );
+  } else {
+    local_addr.sin.sin_family = AF_INET;
+    local_addr.sin.sin_addr.s_addr = htonl( INADDR_ANY );
+    local_addr_len = sizeof( local_addr.sin );
+  }
+  if ( ::bind( sock(), &local_addr.sa, local_addr_len ) != 0 ) {
+    throw NetworkException( "bind", WSAGetLastError() );
+  }
 }
 
 void Connection::setup( void )
@@ -184,9 +202,9 @@ void Connection::setup( void )
   last_port_choice = timestamp();
 }
 
-const std::vector< int > Connection::fds( void ) const
+const std::vector< SOCKET > Connection::fds( void ) const
 {
-  std::vector< int > ret;
+  std::vector< SOCKET > ret;
 
   for ( std::deque< Socket >::const_iterator it = socks.begin();
 	it != socks.end();
@@ -285,7 +303,7 @@ Connection::Connection( const char *desired_ip, const char *desired_port ) /* se
     throw; /* this time it's fatal */
   }
 
-  throw NetworkException( "Could not bind", errno );
+  throw NetworkException( "Could not bind", WSAGetLastError() );
 }
 
 bool Connection::try_bind( const char *addr, int port_low, int port_high )
@@ -326,7 +344,7 @@ bool Connection::try_bind( const char *addr, int port_low, int port_high )
     if ( local_addr.sa.sa_family == AF_INET6
       && memcmp(&local_addr.sin6.sin6_addr, &in6addr_any, sizeof(in6addr_any)) == 0 ) {
       const int off = 0;
-      if ( setsockopt( sock(), IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off) ) ) {
+      if ( setsockopt( sock(), IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char *>( &off ), sizeof(off) ) ) {
         perror( "setsockopt( IPV6_V6ONLY, off )" );
       }
     }
@@ -336,7 +354,7 @@ bool Connection::try_bind( const char *addr, int port_low, int port_high )
       return true;
     } // else fallthrough to below code, on last iteration.
   }
-  int saved_errno = errno;
+  int saved_errno = WSAGetLastError();
   socks.pop_back();
   char host[ NI_MAXHOST ], serv[ NI_MAXSERV ];
   int errcode = getnameinfo( &local_addr.sa, local_addr_len,
@@ -387,6 +405,7 @@ Connection::Connection( const char *key_str, const char *ip, const char *port ) 
   has_remote_addr = true;
 
   socks.push_back( Socket( remote_addr.sa.sa_family ) );
+  bind_any( remote_addr.sa.sa_family );
 
   set_MTU( remote_addr.sa.sa_family );
 }
@@ -401,15 +420,16 @@ void Connection::send( const string & s )
 
   string p = session.encrypt( px.toMessage() );
 
-  ssize_t bytes_sent = sendto( sock(), p.data(), p.size(), MSG_DONTWAIT,
-			       &remote_addr.sa, remote_addr_len );
+  int bytes_sent = sendto( sock(), p.data(), static_cast<int>( p.size() ), 0,
+			   &remote_addr.sa, remote_addr_len );
 
-  if ( bytes_sent != static_cast<ssize_t>( p.size() ) ) {
+  if ( bytes_sent != static_cast<int>( p.size() ) ) {
     /* Make sendto() failure available to the frontend. */
+    int saved_error = WSAGetLastError();
     send_error = "sendto: ";
-    send_error += strerror( errno );
+    send_error += mosh_error_string( saved_error );
 
-    if ( errno == EMSGSIZE ) {
+    if ( saved_error == WSAEMSGSIZE ) {
       MTU = DEFAULT_SEND_MTU; /* payload MTU of last resort */
     }
   }
@@ -438,8 +458,11 @@ string Connection::recv( void )
     try {
       payload = recv_one( it->fd());
     } catch ( NetworkException & e ) {
-      if ( (e.the_errno == EAGAIN)
-	   || (e.the_errno == EWOULDBLOCK) ) {
+      /* Nothing there, or an ICMP error for an earlier datagram, which
+	 doesn't matter to a datagram protocol. */
+      if ( (e.the_errno == WSAEWOULDBLOCK)
+	   || (e.the_errno == WSAECONNRESET)
+	   || (e.the_errno == WSAENETRESET) ) {
 	continue;
       } else {
 	throw;
@@ -453,60 +476,27 @@ string Connection::recv( void )
   throw NetworkException( "No packet received" );
 }
 
-string Connection::recv_one( int sock_to_recv )
+string Connection::recv_one( SOCKET sock_to_recv )
 {
-  /* receive source address, ECN, and payload in msghdr structure */
+  /* receive source address and payload */
   Addr packet_remote_addr;
-  struct msghdr header;
-  struct iovec msg_iovec;
+  socklen_t packet_remote_addr_len = sizeof packet_remote_addr;
 
   char msg_payload[ Session::RECEIVE_MTU ];
-  char msg_control[ Session::RECEIVE_MTU ];
 
-  /* receive source address */
-  header.msg_name = &packet_remote_addr;
-  header.msg_namelen = sizeof packet_remote_addr;
-
-  /* receive payload */
-  msg_iovec.iov_base = msg_payload;
-  msg_iovec.iov_len = sizeof msg_payload;
-  header.msg_iov = &msg_iovec;
-  header.msg_iovlen = 1;
-
-  /* receive explicit congestion notification */
-  header.msg_control = msg_control;
-  header.msg_controllen = sizeof msg_control;
-
-  /* receive flags */
-  header.msg_flags = 0;
-
-  ssize_t received_len = recvmsg( sock_to_recv, &header, MSG_DONTWAIT );
+  int received_len = recvfrom( sock_to_recv, msg_payload, sizeof msg_payload, 0,
+			       &packet_remote_addr.sa, &packet_remote_addr_len );
 
   if ( received_len < 0 ) {
-    throw NetworkException( "recvmsg", errno );
+    int saved_error = WSAGetLastError();
+    if ( saved_error == WSAEMSGSIZE ) {
+      throw NetworkException( "Received oversize datagram", saved_error );
+    }
+    throw NetworkException( "recvfrom", saved_error );
   }
 
-  if ( header.msg_flags & MSG_TRUNC ) {
-    throw NetworkException( "Received oversize datagram", errno );
-  }
-
-  /* receive ECN */
-  bool congestion_experienced = false;
-
-  struct cmsghdr *ecn_hdr = CMSG_FIRSTHDR( &header );
-  if ( ecn_hdr
-       && ecn_hdr->cmsg_level == IPPROTO_IP
-       && ( ecn_hdr->cmsg_type == IP_TOS
-#ifdef IP_RECVTOS
-	    || ecn_hdr->cmsg_type == IP_RECVTOS
-#endif
-	    ) ) {
-    /* got one */
-    uint8_t *ecn_octet_p = (uint8_t *)CMSG_DATA( ecn_hdr );
-    assert( ecn_octet_p );
-
-    congestion_experienced = (*ecn_octet_p & 0x03) == 0x03;
-  }
+  /* Windows doesn't pass on the ECN bits (see above). */
+  const bool congestion_experienced = false;
 
   Packet p( session.decrypt( msg_payload, received_len ) );
 
@@ -556,10 +546,10 @@ string Connection::recv_one( int sock_to_recv )
   last_heard = timestamp();
 
   if ( server && /* only client can roam */
-       ( remote_addr_len != header.msg_namelen ||
+       ( remote_addr_len != packet_remote_addr_len ||
 	 memcmp( &remote_addr, &packet_remote_addr, remote_addr_len ) != 0 ) ) {
     remote_addr = packet_remote_addr;
-    remote_addr_len = header.msg_namelen;
+    remote_addr_len = packet_remote_addr_len;
     char host[ NI_MAXHOST ], serv[ NI_MAXSERV ];
     int errcode = getnameinfo( &remote_addr.sa, remote_addr_len,
 			       host, sizeof( host ), serv, sizeof( serv ),
@@ -579,7 +569,7 @@ std::string Connection::port( void ) const
   socklen_t addrlen = sizeof( local_addr );
 
   if ( getsockname( sock(), &local_addr.sa, &addrlen ) < 0 ) {
-    throw NetworkException( "getsockname", errno );
+    throw NetworkException( "getsockname", WSAGetLastError() );
   }
 
   char serv[ NI_MAXSERV ];
@@ -633,21 +623,25 @@ uint64_t Connection::timeout( void ) const
 
 Connection::Socket::~Socket()
 {
-  fatal_assert ( close( _fd ) == 0 );
-}
-
-Connection::Socket::Socket( const Socket & other )
-  : _fd( dup( other._fd ) )
-{
-  if ( _fd < 0 ) {
-    throw NetworkException( "socket", errno );
+  if ( _fd != INVALID_SOCKET ) {
+    closesocket( _fd );
   }
 }
 
-Connection::Socket & Connection::Socket::operator=( const Socket & other )
+Connection::Socket::Socket( Socket && other )
+  : _fd( other._fd )
 {
-  if ( dup2( other._fd, _fd ) < 0 ) {
-    throw NetworkException( "socket", errno );
+  other._fd = INVALID_SOCKET;
+}
+
+Connection::Socket & Connection::Socket::operator=( Socket && other )
+{
+  if ( this != &other ) {
+    if ( _fd != INVALID_SOCKET ) {
+      closesocket( _fd );
+    }
+    _fd = other._fd;
+    other._fd = INVALID_SOCKET;
   }
 
   return *this;

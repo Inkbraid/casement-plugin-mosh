@@ -30,6 +30,10 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   on Windows the bytes come from the system's generator (BCryptGenRandom)
+   instead of /dev/urandom. */
+
 #ifndef PRNG_HPP
 #define PRNG_HPP
 
@@ -39,13 +43,38 @@
 
 #include "crypto.h"
 
+using namespace Crypto;
+
+#if defined(_WIN32)
+
+#include "windows_port.h"
+
+class PRNG {
+ private:
+  /* unimplemented to satisfy -Weffc++ */
+  PRNG( const PRNG & );
+  PRNG & operator=( const PRNG & );
+
+ public:
+  PRNG() {}
+
+  void fill( void *dest, size_t size ) {
+    if ( 0 == size ) {
+      return;
+    }
+
+    if ( !mosh_random_bytes( dest, size ) ) {
+      throw CryptoException( "Could not get random bytes from the system" );
+    }
+  }
+
+#else
+
 /* Read random bytes from /dev/urandom.
 
    We rely on stdio buffering for efficiency. */
 
 static const char rdev[] = "/dev/urandom";
-
-using namespace Crypto;
 
 class PRNG {
  private:
@@ -68,6 +97,8 @@ class PRNG {
       throw CryptoException( "Could not read from " + std::string( rdev ) );
     }
   }
+
+#endif
 
   uint8_t uint8() {
     uint8_t x;

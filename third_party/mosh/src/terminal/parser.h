@@ -30,13 +30,15 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   characters are char32_t, since wchar_t has 16 bits on Windows. */
+
 #ifndef PARSER_HPP
 #define PARSER_HPP
 
 /* Based on Paul Williams's parser,
    http://www.vt100.net/emu/dec_ansi_parser */
 
-#include <wchar.h>
 #include <string.h>
 
 #include "parsertransition.h"
@@ -58,7 +60,7 @@ namespace Parser {
     Parser & operator=( const Parser & );
     ~Parser() {}
 
-    void input( wchar_t ch, Actions &actions );
+    void input( char32_t ch, Actions &actions );
 
     void reset_input( void )
     {

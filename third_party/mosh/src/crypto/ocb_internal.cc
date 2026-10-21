@@ -24,6 +24,10 @@
 / Comments are welcome: Ted Krovetz <ted@krovetz.net> - Dedicated to Laurel K
 /------------------------------------------------------------------------- */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026: for
+   MSVC, "inline" is left alone in C++, SSSE3 isn't assumed, and ntz() passes
+   _BitScanForward() the unsigned long it takes. */
+
 #include "config.h"
 
 /* This module implements the ae.h interface for OpenSSL, Apple Common
@@ -113,10 +117,17 @@
 
 /* Compiler-specific intrinsics and fixes: bswap64, ntz                    */
 #if _MSC_VER
+	#ifndef __cplusplus
 	#define inline __inline        /* MSVC doesn't recognize "inline" in C */
+	#endif
 	#define restrict __restrict  /* MSVC doesn't recognize "restrict" in C */
+	#ifndef __SSE2__
     #define __SSE2__   (_M_IX86 || _M_AMD64 || _M_X64)    /* Assume SSE2  */
-    #define __SSSE3__  (_M_IX86 || _M_AMD64 || _M_X64)    /* Assume SSSE3 */
+	#endif
+	/* Not every x64 processor Windows 10 runs on has SSSE3. */
+	#ifndef __SSSE3__
+    #define __SSSE3__  0
+	#endif
 	#include <intrin.h>
 	#pragma intrinsic(_byteswap_uint64, _BitScanForward, memcpy)
 #elif __GNUC__
@@ -149,7 +160,7 @@
 #endif
 
 #if _MSC_VER
-	static inline unsigned ntz(unsigned x) {_BitScanForward(&x,x);return x;}
+	static inline unsigned ntz(unsigned x) {unsigned long i;_BitScanForward(&i,x);return (unsigned)i;}
 #elif HAVE_DECL___BUILTIN_CTZ
 	#define ntz(x)     __builtin_ctz((unsigned)(x))   /* GCC 3.4+ */
 #elif HAVE_DECL_FFS

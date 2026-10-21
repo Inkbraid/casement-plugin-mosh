@@ -30,110 +30,26 @@
     also delete it here.
 */
 
-/* This is in its own file because otherwise the ncurses #defines
-   alias our own variable names. */
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   Windows has no terminfo. The terminal is always Casement's terminal view,
+   which emulates xterm-256color, so the capabilities are fixed to that
+   entry's (ncurses 6.4): ech=\E[%p1%dX, bce, smcup=\E[?1049h\E[22;0;0t,
+   rmcup=\E[?1049l\E[23;0;0t; and xterm can set the window title. */
 
 #include "config.h"
 #include "terminaldisplay.h"
 
-#include <string>
-#include <stdexcept>
-
-#if defined HAVE_NCURSESW_CURSES_H
-#  include <ncursesw/curses.h>
-#  include <ncursesw/term.h>
-#elif defined HAVE_NCURSESW_H
-#  include <ncursesw.h>
-#  include <term.h>
-#elif defined HAVE_NCURSES_CURSES_H
-#  include <ncurses/curses.h>
-#  include <ncurses/term.h>
-#elif defined HAVE_NCURSES_H
-#  include <ncurses.h>
-#  include <term.h>
-#elif defined HAVE_CURSES_H
-#  include <curses.h>
-#  include <term.h>
-#else
-#  error "SysV or X/Open-compatible Curses header file required"
-#endif
 #include <stdlib.h>
-#include <string.h>
 
 using namespace Terminal;
-
-static bool ti_flag( const char *capname )
-{
-  int val = tigetflag( const_cast<char *>( capname ) );
-  if ( val == -1 ) {
-    throw std::invalid_argument( std::string( "Invalid terminfo boolean capability " ) + capname );
-  }
-  return val;
-}
-
-static const char *ti_str( const char *capname )
-{
-  const char *val = tigetstr( const_cast<char *>( capname ) );
-  if ( val == (const char *)-1 ) {
-    throw std::invalid_argument( std::string( "Invalid terminfo string capability " ) + capname );
-  }
-  return val;
-}
 
 Display::Display( bool use_environment )
   : has_ech( true ), has_bce( true ), has_title( true ), smcup( NULL ), rmcup( NULL )
 {
   if ( use_environment ) {
-    int errret = -2;
-    int ret = setupterm( (char *)0, 1, &errret );
-
-    if ( ret != OK ) {
-      switch ( errret ) {
-      case 1:
-	throw std::runtime_error( "Terminal is hardcopy and cannot be used by curses applications." );
-	break;
-      case 0:
-	throw std::runtime_error( "Unknown terminal type." );
-	break;
-      case -1:
-	throw std::runtime_error( "Terminfo database could not be found." );
-	break;
-      default:
-	throw std::runtime_error( "Unknown terminfo error." );
-	break;
-      } 
-    }
-
-    /* check for ECH */
-    has_ech = ti_str( "ech" );
-
-    /* check for BCE */
-    has_bce = ti_flag( "bce" );
-
-    /* Check if we can set the window title and icon name.  terminfo does not
-       have reliable information on this, so we hardcode a whitelist of
-       terminal type prefixes. */
-    static const char * const title_term_types[] = {
-      "xterm", "rxvt", "kterm", "Eterm", "alacritty", "screen", "tmux"
-    };
-
-    has_title = false;
-    const char *term_type = getenv( "TERM" );
-    if ( term_type ) {
-      for ( size_t i = 0;
-            i < sizeof( title_term_types ) / sizeof( const char * );
-            i++ ) {
-        if ( 0 == strncmp( term_type, title_term_types[ i ],
-                           strlen( title_term_types[ i ] ) ) ) {
-          has_title = true;
-          break;
-        }
-      }
-    }
-
     if ( !getenv( "MOSH_NO_TERM_INIT" ) ) {
-      smcup = ti_str("smcup");
-      rmcup = ti_str("rmcup");
+      smcup = "\033[?1049h\033[22;0;0t";
+      rmcup = "\033[?1049l\033[23;0;0t";
     }
   }
 }

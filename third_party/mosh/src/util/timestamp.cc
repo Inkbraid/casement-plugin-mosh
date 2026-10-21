@@ -30,11 +30,18 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   on Windows the time comes from QueryPerformanceCounter(). */
+
 #include "config.h"
 
 #include "timestamp.h"
 
 #include <errno.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 #if HAVE_CLOCK_GETTIME
 #include <time.h>
@@ -71,6 +78,19 @@ uint64_t frozen_timestamp( void )
 
 void freeze_timestamp( void )
 {
+#if defined(_WIN32)
+  // Monotonic, with a resolution far better than a millisecond.
+  static LARGE_INTEGER frequency;
+  if ( frequency.QuadPart == 0 ) {
+    QueryPerformanceFrequency( &frequency );
+  }
+  LARGE_INTEGER now;
+  QueryPerformanceCounter( &now );
+  const uint64_t ticks = now.QuadPart;
+  const uint64_t hz = frequency.QuadPart;
+  millis_cache = ( ticks / hz ) * 1000 + ( ticks % hz ) * 1000 / hz;
+  return;
+#endif
   // Try all our clock sources till we get something.  This could
   // break if a source only sometimes works in a given process.
 #if HAVE_CLOCK_GETTIME
@@ -124,7 +144,7 @@ void freeze_timestamp( void )
     millis_cache = millis;
     return;
   }
-#else
+#elif !defined(_WIN32)
 # error "gettimeofday() unavailable-- required as timer of last resort"
 #endif
 }

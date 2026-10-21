@@ -30,6 +30,9 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   characters are char32_t, since wchar_t has 16 bits on Windows. */
+
 #ifndef PARSERACTION_HPP
 #define PARSERACTION_HPP
 
@@ -46,7 +49,7 @@ namespace Parser {
   class Action
   {
   public:
-    wchar_t ch;
+    char32_t ch;
     bool char_present;
 
     virtual std::string name( void ) = 0;

@@ -30,13 +30,18 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   characters are char32_t, since wchar_t has 16 bits on Windows, Windows
+   has no wcwidth() (mosh_wcwidth() measures as glibc does), and
+   <unistd.h> isn't needed. */
+
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <typeinfo>
 
 #include "terminal.h"
+#include "unicode.h"
 
 using namespace Terminal;
 
@@ -60,13 +65,13 @@ void Emulator::print( const Parser::Print *act )
 {
   assert( act->char_present );
 
-  const wchar_t ch = act->ch;
+  const char32_t ch = act->ch;
 
   /*
    * Check for printing ISO 8859-1 first, it's a cheap way to detect
    * some common narrow characters.
    */
-  const int chwidth = ch == L'\0' ? -1 : ( Cell::isprint_iso8859_1( ch ) ? 1 : wcwidth( ch ));
+  const int chwidth = ch == U'\0' ? -1 : ( Cell::isprint_iso8859_1( ch ) ? 1 : mosh_wcwidth( ch ));
 
   Cell *this_cell = fb.get_mutable_cell();
 

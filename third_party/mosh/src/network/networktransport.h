@@ -30,6 +30,9 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   sockets are Winsock SOCKET handles. */
+
 #ifndef NETWORK_TRANSPORT_HPP
 #define NETWORK_TRANSPORT_HPP
 
@@ -104,7 +107,7 @@ namespace Network {
 
     const TimestampedState<RemoteState> & get_latest_remote_state( void ) const { return received_states.back(); }
 
-    const std::vector< int > fds( void ) const { return connection.fds(); }
+    const std::vector< SOCKET > fds( void ) const { return connection.fds(); }
 
     void set_verbose( unsigned int s_verbose ) { sender.set_verbose( s_verbose ); verbose = s_verbose; }
 

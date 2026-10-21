@@ -30,12 +30,17 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   Windows has no core dumps to turn off. */
+
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <assert.h>
+#if !defined(_WIN32)
 #include <sys/resource.h>
+#endif
 #include <fstream>
 
 #include "byteorder.h"
@@ -285,6 +290,15 @@ const Message Session::decrypt( const char *str, size_t len )
   return ret;
 }
 
+#if defined(_WIN32)
+
+/* Windows writes no core files. (Windows Error Reporting can be set up to
+   keep crash dumps; that is the user's or administrator's choice.) */
+void Crypto::disable_dumping_core( void ) {}
+void Crypto::reenable_dumping_core( void ) {}
+
+#else
+
 static rlim_t saved_core_rlimit;
 
 /* Disable dumping core, as a precaution to avoid saving sensitive data
@@ -314,3 +328,5 @@ void Crypto::reenable_dumping_core( void ) {
     setrlimit( RLIMIT_CORE, &limit );
   }
 }
+
+#endif

@@ -30,6 +30,9 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   [[maybe_unused]] instead of GCC's __attribute((unused)), for MSVC. */
+
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
@@ -69,7 +72,7 @@ void Dispatcher::collect( const Parser::Collect *act )
   }
 }
 
-void Dispatcher::clear( const Parser::Clear *act __attribute((unused)) )
+void Dispatcher::clear( [[maybe_unused]] const Parser::Clear *act )
 {
   params.clear();
   dispatch_chars.clear();
@@ -241,7 +244,7 @@ void Dispatcher::OSC_put( const Parser::OSC_Put *act )
   }
 }
 
-void Dispatcher::OSC_start( const Parser::OSC_Start *act __attribute((unused)) )
+void Dispatcher::OSC_start( [[maybe_unused]] const Parser::OSC_Start *act )
 {
   OSC_string.clear();
 }

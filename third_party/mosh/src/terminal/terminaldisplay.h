@@ -30,6 +30,9 @@
     also delete it here.
 */
 
+/* Changed for the Windows port in casement-plugin-mosh, October 2026:
+   characters are char32_t, since wchar_t has 16 bits on Windows. */
+
 #ifndef TERMINALDISPLAY_HPP
 #define TERMINALDISPLAY_HPP
 
@@ -51,7 +54,7 @@ namespace Terminal {
 
     void append( char c ) { str.append( 1, c ); }
     void append( size_t s, char c ) { str.append( s, c ); }
-    void append( wchar_t wc ) { Cell::append_to_str( str, wc ); }
+    void append( char32_t wc ) { Cell::append_to_str( str, wc ); }
     void append( const char * s ) { str.append( s ); }
     void append_string( const std::string &append ) { str.append(append); }
 
