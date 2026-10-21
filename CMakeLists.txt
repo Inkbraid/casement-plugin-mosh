@@ -14,7 +14,8 @@ find_package(OpenSSL 3.0 REQUIRED)
 find_package(ZLIB REQUIRED)
 
 # mosh's client (third_party/mosh, ported to Windows) with the plugin's
-# replacements for what Windows lacks (src/mosh/port). mosh is C++11 code; it
+# replacements for what Windows lacks (src/mosh/port), and src/mosh/client.cpp,
+# the plugin's one file that talks to mosh's classes. mosh is C++11 code; it
 # is built as C++17, apart from the C++20 the rest uses. Its headers stay out
 # of the rest: they bring names into the global namespace.
 set(MOSH_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mosh/src)
@@ -64,7 +65,9 @@ add_library(mosh_port STATIC
     ${MOSH_DIR}/util/timestamp.cc
     src/mosh/port/protobuf.cpp
     src/mosh/port/unicode.cpp
-    src/mosh/port/windows_port.cpp)
+    src/mosh/port/windows_port.cpp
+    src/mosh/client.cpp)
+target_include_directories(mosh_port PRIVATE src)
 target_link_libraries(mosh_port PRIVATE mosh_headers)
 target_link_libraries(mosh_port PUBLIC OpenSSL::Crypto ZLIB::ZLIB ws2_32 bcrypt crypt32 user32 advapi32)
 
@@ -74,9 +77,10 @@ add_library(mosh_plugin STATIC
     src/mosh/connect_scanner.cpp
     src/mosh/conpty.cpp
     src/mosh/options.cpp
+    src/mosh/session.cpp
     src/mosh/ssh.cpp)
 target_include_directories(mosh_plugin PUBLIC src)
-target_link_libraries(mosh_plugin PUBLIC casement ws2_32)
+target_link_libraries(mosh_plugin PUBLIC casement mosh_port ws2_32)
 
 casement_plugin_executable(casement-mosh src/main.cpp)
 target_link_libraries(casement-mosh PRIVATE mosh_plugin)
