@@ -214,7 +214,8 @@ states.
 `tools/sim` (Casement's side of the protocol) against a real mosh-server:
 
 ```sh
-ci/e2e.sh build
+ci/e2e.sh build              # all of them
+ci/e2e.sh build local_echo   # those whose names contain local_echo
 ```
 
 They need Wine, mosh-server, python3 and setsid; with OpenSSH's ssh and
@@ -236,6 +237,11 @@ as typed; no answer over UDP; IPv6 (skipped without an IPv6 loopback); and
 the real OpenSSH client and server, with a host name only ssh's
 configuration knows.
 
+CI (`.github/workflows/ci.yml`) builds the plugin with MSVC and runs the
+unit tests, cross-builds it with MinGW and runs the unit and end-to-end
+tests under Wine on Ubuntu 24.04, and runs the end-to-end tests on the MSVC
+build's exe as well.
+
 ## Protocol v2
 
 The plugin needs **P7**, the terminal view, and nothing else: ssh's prompts
@@ -248,7 +254,9 @@ implements it is written up in [docs/terminal-view.md](docs/terminal-view.md).
 The plugin is licensed under the GNU General Public License, version 3 or
 later, with the OpenSSL linking exception mosh uses; see
 [LICENSE](LICENSE). Release zips hold the exe with its manifest, icon and
-documents; the corresponding source is each release's source archive.
+documents; the corresponding source is each release's source archive, and
+the sources of the libraries linked into the exe are attached to the
+release as well.
 
 Third-party components:
 

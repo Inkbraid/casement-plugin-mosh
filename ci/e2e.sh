@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Runs the end-to-end tests of a MinGW build under Wine, against a real
-# mosh-server:
+# Runs the end-to-end tests under Wine, against a real mosh-server:
 #
-#   ci/e2e.sh <build dir>
+#   ci/e2e.sh <dir> [test name filter]
+#
+# <dir> holds casement-mosh.exe, e2e_tests.exe and fake-ssh.exe: a MinGW
+# build directory, or the MSVC build's casement-mosh.exe next to the MinGW
+# build's test programs.
 #
 # It starts tests/e2e/fake-sshd.py, the remote side for fake-ssh (the
-# tests' stand-in for ssh.exe, which doesn't run under Wine), and, when
-# OpenSSH's ssh and sshd are installed, sets them up for the test that
-# runs the real ones: a key, a host key, and configurations in a
-# temporary directory. Needs mosh-server, python3, setsid and Wine.
+# tests' stand-in for Windows' ssh.exe), and, when OpenSSH's ssh and sshd
+# are installed, sets them up for the test that runs the real ones: a key,
+# a host key, and configurations in a temporary directory. Needs
+# mosh-server, python3, setsid and Wine.
 #
 # It uses TCP port 2222 and UDP ports 61000-61099 only, and stops only
 # the processes it started.
@@ -80,4 +83,5 @@ done
 
 export CASEMENT_MOSH_E2E_HELPER=127.0.0.1:$PORT
 export WINEDEBUG=${WINEDEBUG:--all}
-ctest --test-dir "$BUILD" --output-on-failure -L e2e "${@:2}"
+WINE=$(command -v wine || command -v wine64)
+"$WINE" "$BUILD/e2e_tests.exe" "${@:2}"

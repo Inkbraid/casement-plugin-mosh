@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A newer push to the same branch or pull request replaces a running check.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # vcpkg at the commit vcpkg.json's builtin-baseline names (tag 2026.10.16);
+  # keep the two in step.
+  VCPKG_COMMIT_ID: "9eec002df1cd109f8f104cd966a763daf9751489"
+  # vcpkg removed its GitHub Actions cache backend; built packages are kept
+  # in a folder that actions/cache saves instead.
+  VCPKG_BINARY_SOURCES: "clear;files,C:\\vcpkg-binary-cache,readwrite"
+
+jobs:
+  windows:
+    name: Windows build (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Restore the built libraries
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg-binary-cache
+          key: vcpkg-x64-windows-static-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-x64-windows-static-${{ env.VCPKG_COMMIT_ID }}-
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+      - name: Configure (vcpkg builds OpenSSL and zlib)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\vcpkg-binary-cache | Out-Null
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+      - name: vcpkg logs
+        if: failure()
+        shell: bash
+        run: find /c/vcpkg/buildtrees -name "*.log" -exec sh -c 'echo "== $1"; tail -n 50 "$1"' _ {} \; || true
+      - name: Build
+        run: cmake --build build
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure -L unit
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/mosh | Out-Null
+          Copy-Item build/casement-mosh.exe, plugin.json, icon.png, LICENSE, README.md, CHANGELOG.md dist/mosh/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: casement-mosh-windows-x64
+          path: dist/
+
+  linux:
+    name: Cross build and end-to-end tests (MinGW, Wine)
+    runs-on: ubuntu-24.04
+    env:
+      WINEDEBUG: -all
+      # No offers to install Mono or Gecko into the new Wine prefix.
+      WINEDLLOVERRIDES: "mscoree,mshtml="
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        # wine64 alone has no wine command (wine is only a recommendation);
+        # the end-to-end tests run mosh-server, ssh and sshd.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mingw-w64 wine64 wine ninja-build cmake \
+            mosh openssh-client openssh-server python3
+      - name: Restore third-party builds
+        uses: actions/cache@v4
+        with:
+          path: ~/mingw64
+          key: mingw64-${{ hashFiles('ci/mingw-deps.sh') }}
+      - name: Third-party libraries
+        run: ci/mingw-deps.sh ~/mingw64 zlib openssl
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64.cmake -DCMAKE_PREFIX_PATH=$HOME/mingw64
+      - name: Build
+        run: cmake --build build
+      - name: Wine prefix
+        run: wineboot --init && wineserver --wait
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure -L unit
+      - name: End-to-end tests
+        env:
+          CASEMENT_E2E: "1"
+        run: ci/e2e.sh build
+      - name: Keep the test programs for the MSVC build's end-to-end tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-programs
+          path: |
+            build/e2e_tests.exe
+            build/fake-ssh.exe
+          retention-days: 7
+
+  # The exe the Windows job built, the one users get, through the same
+  # end-to-end tests: MSVC's build next to the MinGW-built test programs.
+  e2e-msvc:
+    name: End-to-end tests of the MSVC build (Wine)
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    env:
+      WINEDEBUG: -all
+      WINEDLLOVERRIDES: "mscoree,mshtml="
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends wine64 wine mosh openssh-client openssh-server python3
+      - uses: actions/download-artifact@v4
+        with:
+          name: casement-mosh-windows-x64
+          path: msvc
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-programs
+          path: msvc/mosh
+      - name: Wine prefix
+        run: wineboot --init && wineserver --wait
+      - name: End-to-end tests
+        env:
+          CASEMENT_E2E: "1"
+        run: ci/e2e.sh msvc/mosh

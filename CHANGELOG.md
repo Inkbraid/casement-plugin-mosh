@@ -19,5 +19,7 @@
 - Extra ssh options that make ssh run programs, load libraries or write
   files on this computer are refused, and so are host and user names with
   shell metacharacters.
-- Unit tests, and end-to-end tests that run the plugin under Wine against
-  a real mosh-server and OpenSSH.
+- Unit tests; end-to-end tests that run the plugin under Wine against a
+  real mosh-server and OpenSSH; CI for the MSVC and MinGW builds; a
+  release workflow that also publishes the sources of the libraries in the
+  exe.

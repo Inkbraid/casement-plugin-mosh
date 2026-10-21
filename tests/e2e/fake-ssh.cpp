@@ -1,5 +1,5 @@
-// fake-ssh: a stand-in for ssh.exe in the end-to-end tests (Windows OpenSSH
-// doesn't run under Wine). The plugin runs it through CASEMENT_MOSH_SSH with
+// fake-ssh: a stand-in for Windows' ssh.exe in the end-to-end tests, which
+// run under Wine on Linux. The plugin runs it through CASEMENT_MOSH_SSH with
 // the command line it would give ssh.exe. It takes ssh's options, connects
 // to the destination's port, where tests/e2e/fake-sshd.py listens, and has
 // that run the remote command (in a pseudo terminal, as sshd would) or hand
