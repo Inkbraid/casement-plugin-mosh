@@ -94,3 +94,13 @@ target_link_libraries(bootstrap_tests PRIVATE mosh_plugin)
 
 casement_test(port_tests unit tests/unit/port_tests.cpp)
 target_link_libraries(port_tests PRIVATE mosh_port mosh_headers casement_options)
+
+# The end-to-end tests: the plugin under casement-sim's Casement, against a
+# real mosh-server, with fake-ssh standing in for ssh.exe (see ci/e2e.sh).
+add_executable(fake-ssh tests/e2e/fake-ssh.cpp)
+target_include_directories(fake-ssh PRIVATE third_party)
+target_link_libraries(fake-ssh PRIVATE casement_options ws2_32 shell32)
+
+casement_test(e2e_tests e2e tests/e2e/mosh_tests.cpp)
+target_link_libraries(e2e_tests PRIVATE casement_sim casement_options ws2_32)
+add_dependencies(e2e_tests casement-mosh fake-ssh)
