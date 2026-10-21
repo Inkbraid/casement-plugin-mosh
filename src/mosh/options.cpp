@@ -49,6 +49,83 @@ constexpr std::string_view ssh_getopt = "1246ab:c:e:fgi:kl:m:no:p:qstvxAB:CD:E:F
 // else instead of it.
 constexpr std::string_view ssh_forbidden = "fsGNOQVW";
 
+// Options that make ssh run a program, load a library or write a file on
+// this computer: -E (log file), -F (configuration file), -I (PKCS#11
+// library) and these -o keywords. An address may come from someone else;
+// the user's own ssh configuration is the place for them.
+constexpr std::string_view ssh_local_letters = "EFI";
+constexpr std::string_view ssh_local_keywords[] = {"KnownHostsCommand", "LocalCommand",        "PermitLocalCommand",
+                                                   "PKCS11Provider",    "ProxyCommand",        "SecurityKeyProvider",
+                                                   "XAuthLocation"};
+
+/// An -o value split the way ssh reads it (strdelim() in OpenSSH's misc.c):
+/// the keyword, in lower case as ssh compares it, and the rest. Blanks and
+/// an '=' before the keyword are skipped, quotes group, a blank or an '='
+/// ends it. Where this differs from ssh, it finds a keyword ssh wouldn't.
+std::pair<std::string, std::string_view> split_option(std::string_view value) {
+    auto blank = [](char c) { return c == ' ' || c == '\t'; };
+    std::size_t i = 0;
+    while (i < value.size() && (blank(value[i]) || value[i] == '=')) ++i;
+    std::string keyword;
+    bool quoted = false;
+    for (; i < value.size(); ++i) {
+        char c = value[i];
+        if (c == '"') {
+            quoted = !quoted;
+            continue;
+        }
+        if (!quoted && (blank(c) || c == '=')) break;
+        keyword += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    while (i < value.size() && (blank(value[i]) || value[i] == '=')) ++i;
+    return {keyword, value.substr(i)};
+}
+
+// Host and user names end up in commands: ssh puts them into the commands
+// of ProxyCommand, LocalCommand, KnownHostsCommand and Match exec in the
+// user's configuration (%h, %r, ...), and ProxyJump's hosts into the
+// command it builds for them. OpenSSH 9.6 refuses shell metacharacters in
+// names given on its command line; Windows comes with an older OpenSSH, so
+// the plugin refuses them as OpenSSH 9.6 does (valid_hostname() and
+// valid_ruser() in ssh.c), and a leading '-' as well.
+
+bool valid_host_name(std::string_view s) {
+    if (s.empty() || s[0] == '-') return false;
+    return std::none_of(s.begin(), s.end(), [](char c) {
+        auto u = static_cast<unsigned char>(c);
+        return u <= 0x20 || u == 0x7f || std::string_view("'`\"$\\;&<>|(){},").find(c) != std::string_view::npos;
+    });
+}
+
+bool valid_user_name(std::string_view s) {
+    if (s.empty() || s[0] == '-' || s.back() == '\\' || has_control_characters(s)) return false;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        if (std::string_view("'`\";&<>|(){}").find(s[i]) != std::string_view::npos) return false;
+        if ((s[i] == ' ' || s[i] == '\t') && i + 1 < s.size() && s[i + 1] == '-') return false;
+    }
+    return true;
+}
+
+/// ProxyJump's value: "none", or hosts separated by commas, each
+/// [user@]host[:port] or ssh://[user@]host[:port].
+bool valid_jump_hosts(std::string_view s) {
+    if (s.empty()) return false;
+    for (;;) {
+        auto comma = s.find(',');
+        if (!valid_host_name(s.substr(0, comma))) return false;
+        if (comma == std::string_view::npos) return true;
+        s.remove_prefix(comma + 1);
+    }
+}
+
+std::string local_only(std::string_view option) {
+    return std::format(
+        "The extra ssh options can't include {}: options that can make ssh run programs, load libraries or write "
+        "files on this computer aren't taken from an address, which may come from someone else. Your ssh "
+        "configuration file (.ssh\\config in your user folder) can set it.",
+        option);
+}
+
 }  // namespace
 
 std::string_view to_string(Predict predict) {
@@ -139,19 +216,46 @@ bool check_ssh_args(const std::vector<std::string>& args, std::string& error) {
                 error = std::format("The extra ssh options can't include -{}: ssh has to start mosh-server.", letter);
                 return false;
             }
+            if (ssh_local_letters.find(letter) != std::string_view::npos) {
+                error = local_only(std::format("-{}", letter));
+                return false;
+            }
             auto pos = ssh_getopt.find(letter);
             bool takes_value = pos != std::string_view::npos && pos + 1 < ssh_getopt.size() && ssh_getopt[pos + 1] == ':' &&
                                letter != ':';
             if (!takes_value) continue;
-            if (k + 1 == a.size()) {
-                // The value is the next argument.
+            // The value is the rest of this argument, or the next one.
+            std::string_view value = std::string_view(a).substr(k + 1);
+            if (value.empty()) {
                 if (i + 1 >= args.size()) {
                     error = std::format("The ssh option -{} in the extra ssh options needs a value.", letter);
                     return false;
                 }
-                ++i;
+                value = args[++i];
             }
-            break;  // the rest of this argument is the value
+            bool valid_name = true;
+            if (letter == 'l') valid_name = valid_user_name(value);
+            if (letter == 'J') valid_name = valid_jump_hosts(value);
+            if (letter == 'o') {
+                auto [keyword, rest] = split_option(value);
+                for (std::string_view local : ssh_local_keywords) {
+                    if (lower(local) == keyword) {
+                        error = local_only(std::format("-o {}", local));
+                        return false;
+                    }
+                }
+                if (keyword == "user") valid_name = valid_user_name(rest);
+                if (keyword == "hostname") valid_name = valid_host_name(rest);
+                if (keyword == "proxyjump") valid_name = valid_jump_hosts(rest);
+            }
+            if (!valid_name) {
+                error = std::format(
+                    "“{}” in the extra ssh options can't be used as a host or user name: names can't start with "
+                    "'-' or contain quotes or characters such as $ ; & | < > ( ) {{ }}.",
+                    value);
+                return false;
+            }
+            break;
         }
     }
     return true;
@@ -177,12 +281,9 @@ std::optional<Options> parse_options(const Address& address, std::string_view us
     o.host = address.host;
     o.user = address.user.empty() ? std::string(username) : address.user;
     o.ssh_port = address.port;
-    // ssh would take a leading '-' as the start of an option.
-    if (o.host.empty() || o.host[0] == '-' || has_control_characters(o.host) ||
-        o.host.find_first_of(" \t\"'\\") != std::string::npos)
-        return bad(std::format("“{}” isn't a host name.", o.host));
-    if (!o.user.empty() &&
-        (o.user[0] == '-' || has_control_characters(o.user) || o.user.find_first_of("\"") != std::string::npos))
+    // A leading '-' would also make ssh read them as options.
+    if (!valid_host_name(o.host)) return bad(std::format("“{}” isn't a host name.", o.host));
+    if (!o.user.empty() && !valid_user_name(o.user))
         return bad(std::format("“{}” can't be used as a user name.", o.user));
 
     for (const auto& [name, value] : address.query) {

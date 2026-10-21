@@ -126,4 +126,53 @@ TEST(checks_ssh_options) {
     CHECK(!ok({"-vG"}));
     CHECK(!ok({"-o", "Foo=bar", "extra"}));
 }
+
+TEST(refuses_ssh_options_that_act_on_this_computer) {
+    std::string error;
+    auto ok = [&](Args a) { return check_ssh_args(a, error); };
+    CHECK(!ok({"-oProxyCommand=calc.exe"}));
+    CHECK(error.find("-o ProxyCommand") != std::string::npos);
+    CHECK(!ok({"-o", "proxycommand calc.exe"}));
+    CHECK(!ok({"-o", R"("LocalCommand"=x)"}));
+    CHECK(!ok({"-vo", " PermitLocalCommand=yes"}));
+    CHECK(!ok({"-C", "-o", "KnownHostsCommand=x", "-v"}));
+    CHECK(!ok({"-oPKCS11Provider=C:\\x.dll"}));
+    CHECK(!ok({"-o", "SecurityKeyProvider=x.dll"}));
+    CHECK(!ok({"-o", "XAuthLocation=x.exe"}));
+    CHECK(!ok({"-I", "x.dll"}));
+    CHECK(!ok({"-vE", "log.txt"}));
+    CHECK(error.find("-E") != std::string::npos);
+    CHECK(!ok({"-F", "C:\\other\\config"}));
+    CHECK(!ok({"-o", "=ProxyCommand=x"}));
+    CHECK(!ok({"-o", R"(Proxy"Command"=x)"}));
+    // Values that only look like those options.
+    CHECK(ok({"-o", "ProxyJump=jump.example.com"}));
+    CHECK(ok({"-i", "-F"}));  // a file name
+    CHECK(ok({"-o", "SetEnv=X=ProxyCommand"}));
+}
+
+TEST(refuses_names_with_shell_characters) {
+    std::string error;
+    auto ok = [&](Args a) { return check_ssh_args(a, error); };
+    CHECK(ok({"-J", "jump.example.com,ann@other.example.com:2222"}));
+    CHECK(ok({"-J", "ssh://ann@jump.example.com:22"}));
+    CHECK(ok({"-l", "ann", "-o", "User=DOMAIN\\ann", "-o", "HostName=10.0.0.5", "-oProxyJump=none"}));
+    CHECK(!ok({"-J", "jump&calc"}));
+    CHECK(!ok({"-J", "jump.example.com,-oProxyCommand=x"}));
+    CHECK(!ok({"-o", "ProxyJump=a;b"}));
+    CHECK(!ok({"-l", "a|b"}));
+    CHECK(!ok({"-l", "-oProxyCommand=x"}));
+    CHECK(!ok({"-l", "ann -oProxyCommand=x"}));
+    CHECK(!ok({"-o", R"(User="a;b")"}));
+    CHECK(!ok({"-o", "HostName=$(calc)"}));
+    CHECK(!ok({"-o", "hostname h`calc`"}));
+
+    CHECK(!error_for("mosh://h%26calc").empty());
+    CHECK(!error_for("mosh://h%3Bcalc").empty());
+    CHECK(!error_for("mosh://a%7Cb@h").empty());
+    CHECK(!error_for("mosh://a%60b%60@h").empty());
+    CHECK(error_for("mosh://DOMAIN%5Cann@h").empty());
+    CHECK(error_for("mosh://ann%20smith@h").empty());
+    CHECK(!error_for("mosh://ann%20-oX@h").empty());
+}
 CHECK_MAIN
