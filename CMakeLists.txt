@@ -7,8 +7,20 @@ if(CMAKE_CROSSCOMPILING)
     list(APPEND CMAKE_FIND_ROOT_PATH ${CMAKE_PREFIX_PATH})
 endif()
 
+# With MSVC, too, the plugin is one exe without DLLs to ship: the static C
+# runtime, and OpenSSL and zlib from vcpkg's x64-windows-static triplet.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 include(cmake/casement.cmake)
 enable_testing()
+
+# Assertions stay on in release builds: mosh checks its invariants with
+# assert(), and its own builds never define NDEBUG. (Taking NDEBUG out of the
+# flags, rather than adding /UNDEBUG, keeps MSVC from warning about the
+# conflicting options.)
+foreach(flags CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_RELWITHDEBINFO CMAKE_CXX_FLAGS_MINSIZEREL)
+    string(REGEX REPLACE "(^| )[/-]DNDEBUG($| )" " " ${flags} "${${flags}}")
+endforeach()
 
 find_package(OpenSSL 3.0 REQUIRED)
 find_package(ZLIB REQUIRED)
@@ -20,8 +32,10 @@ find_package(ZLIB REQUIRED)
 # of the rest: they bring names into the global namespace.
 set(MOSH_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mosh/src)
 add_library(mosh_headers INTERFACE)
-target_include_directories(mosh_headers INTERFACE
-    src/mosh/port
+target_include_directories(mosh_headers INTERFACE src/mosh/port)
+# SYSTEM: the unit tests, which include mosh's headers, get warnings for
+# their own code only.
+target_include_directories(mosh_headers SYSTEM INTERFACE
     ${MOSH_DIR}/crypto
     ${MOSH_DIR}/frontend
     ${MOSH_DIR}/network
@@ -31,14 +45,10 @@ target_include_directories(mosh_headers INTERFACE
 target_compile_features(mosh_headers INTERFACE cxx_std_17)
 target_compile_definitions(mosh_headers INTERFACE
     WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00 WINVER=0x0A00)
-# mosh's assertions stay on in release builds, as in mosh's own builds.
 if(MSVC)
-    # mosh converts between integer types freely, and uses C library
-    # functions MSVC calls unsafe; those warnings say nothing about this code.
-    target_compile_options(mosh_headers INTERFACE /W3 /utf-8 /EHsc /permissive- /wd4244 /wd4267 /UNDEBUG)
+    target_compile_options(mosh_headers INTERFACE /utf-8 /EHsc /permissive-)
+    # mosh uses C library functions that MSVC calls unsafe.
     target_compile_definitions(mosh_headers INTERFACE _CRT_SECURE_NO_WARNINGS)
-else()
-    target_compile_options(mosh_headers INTERFACE -Wall -Wextra -UNDEBUG)
 endif()
 
 add_library(mosh_port STATIC
@@ -69,6 +79,13 @@ add_library(mosh_port STATIC
     src/mosh/client.cpp)
 target_include_directories(mosh_port PRIVATE src)
 target_link_libraries(mosh_port PRIVATE mosh_headers)
+if(MSVC)
+    # mosh converts between integer types freely; MSVC's warnings about that
+    # say nothing about this code.
+    target_compile_options(mosh_port PRIVATE /W3 /wd4244 /wd4267)
+else()
+    target_compile_options(mosh_port PRIVATE -Wall -Wextra)
+endif()
 target_link_libraries(mosh_port PUBLIC OpenSSL::Crypto ZLIB::ZLIB ws2_32 bcrypt crypt32 user32 advapi32)
 
 # The plugin's own code, as a library so the tests can use it too.
