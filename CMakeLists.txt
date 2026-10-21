@@ -70,9 +70,13 @@ target_link_libraries(mosh_port PUBLIC OpenSSL::Crypto ZLIB::ZLIB ws2_32 bcrypt 
 
 # The plugin's own code, as a library so the tests can use it too.
 add_library(mosh_plugin STATIC
-    src/mosh/options.cpp)
+    src/mosh/bootstrap.cpp
+    src/mosh/connect_scanner.cpp
+    src/mosh/conpty.cpp
+    src/mosh/options.cpp
+    src/mosh/ssh.cpp)
 target_include_directories(mosh_plugin PUBLIC src)
-target_link_libraries(mosh_plugin PUBLIC casement)
+target_link_libraries(mosh_plugin PUBLIC casement ws2_32)
 
 casement_plugin_executable(casement-mosh src/main.cpp)
 target_link_libraries(casement-mosh PRIVATE mosh_plugin)
@@ -80,6 +84,9 @@ target_compile_definitions(casement-mosh PRIVATE PLUGIN_VERSION="${PROJECT_VERSI
 
 casement_test(options_tests unit tests/unit/options_tests.cpp)
 target_link_libraries(options_tests PRIVATE mosh_plugin)
+
+casement_test(bootstrap_tests unit tests/unit/bootstrap_tests.cpp)
+target_link_libraries(bootstrap_tests PRIVATE mosh_plugin)
 
 casement_test(port_tests unit tests/unit/port_tests.cpp)
 target_link_libraries(port_tests PRIVATE mosh_port mosh_headers casement_options)
