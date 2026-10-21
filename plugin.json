@@ -1,0 +1,29 @@
+{
+  "format": "casement-plugin",
+  "version": 2,
+  "id": "mosh",
+  "name": "Mosh",
+  "description": "Mobile shell over UDP, started through SSH",
+  "icon": "icon.png",
+  "program": "casement-mosh.exe",
+  "homepage": "https://github.com/Inkbraid/casement-plugin-mosh",
+  "capabilities": [],
+  "connections": [
+    {
+      "scheme": "mosh",
+      "name": "Mosh",
+      "view": "terminal",
+      "fields": [
+        { "name": "user", "label": "User", "part": "user", "type": "text" },
+        { "name": "host", "label": "Host", "part": "host", "type": "text", "required": true, "placeholder": "server.example.com" },
+        { "name": "port", "label": "SSH port", "part": "port", "type": "number", "placeholder": "22" },
+        { "name": "udp", "label": "UDP port or range", "part": "query", "type": "text", "placeholder": "60000:61000" },
+        { "name": "server", "label": "mosh-server command", "part": "query", "type": "text", "placeholder": "mosh-server" },
+        { "name": "predict", "label": "Local echo", "part": "query", "type": "choice", "default": "adaptive",
+          "choices": [ { "value": "adaptive", "label": "When the link is slow" }, { "value": "always", "label": "Always" },
+                       { "value": "never", "label": "Never" } ] },
+        { "name": "ssh_args", "label": "Extra ssh options", "part": "query", "type": "text", "placeholder": "-J jump.example.com" }
+      ]
+    }
+  ]
+}
