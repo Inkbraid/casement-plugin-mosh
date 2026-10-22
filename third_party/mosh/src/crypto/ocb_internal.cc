@@ -25,8 +25,8 @@
 /------------------------------------------------------------------------- */
 
 /* Changed for the Windows port in casement-plugin-mosh, October 2026: for
-   MSVC, "inline" is left alone in C++, SSSE3 isn't assumed, and ntz() passes
-   _BitScanForward() the unsigned long it takes. */
+   MSVC, "inline" and "restrict" are left alone in C++, SSSE3 isn't assumed,
+   and ntz() passes _BitScanForward() the unsigned long it takes. */
 
 #include "config.h"
 
@@ -119,8 +119,8 @@
 #if _MSC_VER
 	#ifndef __cplusplus
 	#define inline __inline        /* MSVC doesn't recognize "inline" in C */
-	#endif
 	#define restrict __restrict  /* MSVC doesn't recognize "restrict" in C */
+	#endif
 	#ifndef __SSE2__
     #define __SSE2__   (_M_IX86 || _M_AMD64 || _M_X64)    /* Assume SSE2  */
 	#endif

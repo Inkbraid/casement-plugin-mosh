@@ -64,8 +64,9 @@ sources of mosh 1.4.0, unchanged"). The changes:
   `/dev/urandom`.
 - `crypto/crypto.cc`: no core dump limits on Windows.
 - `crypto/byteorder.h`: byte swapping with the C runtime's intrinsics.
-- `crypto/ocb_internal.cc`: compiles as C++ with MSVC (`inline` left alone,
-  no SSSE3 assumed, the right type for `_BitScanForward()`).
+- `crypto/ocb_internal.cc`: compiles as C++ with MSVC (`inline` and
+  `restrict` left alone, so OpenSSL's `__declspec(restrict)` stays intact; no
+  SSSE3 assumed; the right type for `_BitScanForward()`).
 - `util/timestamp.cc`: the clock is `QueryPerformanceCounter()`.
 - `terminal/terminaldispatcher.cc`, `terminal/terminalfunctions.cc`:
   `[[maybe_unused]]` instead of GCC's `__attribute((unused))`.
