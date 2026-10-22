@@ -1,0 +1,104 @@
+name: Release
+
+# Pushing a tag like v0.1.0 builds and tests the plugin and publishes a
+# release with the zip. GitHub adds the tag's source archives to every
+# release, which keeps each binary next to its corresponding source (mosh's
+# included, in third_party/mosh). OpenSSL and zlib are linked into the exe,
+# so their sources go with it too: their release archives and the vcpkg
+# ports that built them.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  VCPKG_COMMIT_ID: "9eec002df1cd109f8f104cd966a763daf9751489"
+  # vcpkg removed its GitHub Actions cache backend; built packages are kept
+  # in a folder that actions/cache saves instead.
+  VCPKG_BINARY_SOURCES: "clear;files,C:\\vcpkg-binary-cache,readwrite"
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Check the tag matches the version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\([^)]*VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} != version $version" }
+      - name: Restore the built libraries
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg-binary-cache
+          key: vcpkg-x64-windows-static-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-x64-windows-static-${{ env.VCPKG_COMMIT_ID }}-
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+      - name: Configure (vcpkg builds OpenSSL and zlib)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force C:\vcpkg-binary-cache | Out-Null
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure -L unit
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/mosh | Out-Null
+          Copy-Item build/casement-mosh.exe, plugin.json, icon.png, LICENSE, README.md, CHANGELOG.md dist/mosh/
+          Compress-Archive -Path dist/mosh -DestinationPath "casement-mosh-${{ github.ref_name }}-windows-x64.zip"
+      - name: Sources of the libraries in the exe
+        shell: pwsh
+        run: |
+          $dir = "casement-mosh-${{ github.ref_name }}-library-sources"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          # The release archives of the versions vcpkg.json pins, with the
+          # sums ci/mingw-deps.sh checks.
+          $archives = @(
+            @{ url = "https://github.com/openssl/openssl/releases/download/openssl-3.5.4/openssl-3.5.4.tar.gz";
+               sha256 = "967311f84955316969bdb1d8d4b983718ef42338639c621ec4c34fddef355e99" },
+            @{ url = "https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz";
+               sha256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23" }
+          )
+          foreach ($a in $archives) {
+            $file = Join-Path $dir (Split-Path $a.url -Leaf)
+            Invoke-WebRequest $a.url -OutFile $file
+            if ((Get-FileHash $file -Algorithm SHA256).Hash -ne $a.sha256) { throw "wrong SHA-256: $file" }
+          }
+          # vcpkg's build scripts and patches for those versions, from its
+          # version database.
+          $manifest = Get-Content vcpkg.json -Raw | ConvertFrom-Json
+          foreach ($o in $manifest.overrides) {
+            $db = Get-Content "C:/vcpkg/versions/$($o.name[0])-/$($o.name).json" -Raw | ConvertFrom-Json
+            $port = $db.versions | Where-Object { $_.version -eq $o.version -and -not $_.'port-version' } | Select-Object -First 1
+            if (-not $port) { throw "vcpkg has no port for $($o.name) $($o.version)" }
+            $tree = $port.'git-tree'
+            $zip = Join-Path (Resolve-Path $dir) "vcpkg-port-$($o.name)-$($o.version).zip"
+            git -C C:/vcpkg archive --format=zip --prefix="$($o.name)/" -o $zip $tree
+            if ($LASTEXITCODE -ne 0) { throw "git archive failed for $($o.name)" }
+          }
+          Set-Content (Join-Path $dir README.txt) @"
+          OpenSSL and zlib are linked into casement-mosh.exe. These are their
+          release archives, and the vcpkg ports (build scripts and patches)
+          that built them, from https://github.com/microsoft/vcpkg at commit
+          $env:VCPKG_COMMIT_ID. The plugin's own source, mosh's included, is
+          the release's source archive.
+          "@
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            casement-mosh-${{ github.ref_name }}-windows-x64.zip
+            casement-mosh-${{ github.ref_name }}-library-sources.zip
+          generate_release_notes: true

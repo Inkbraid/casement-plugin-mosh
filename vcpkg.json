@@ -1,0 +1,10 @@
+{
+  "name": "casement-plugin-mosh",
+  "version": "0.1.0",
+  "dependencies": ["openssl", "zlib"],
+  "builtin-baseline": "9eec002df1cd109f8f104cd966a763daf9751489",
+  "overrides": [
+    { "name": "openssl", "version": "3.5.4" },
+    { "name": "zlib", "version": "1.3.1" }
+  ]
+}
