@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-23)
 
 - `mosh://` connections in Casement's terminal view: plugin protocol
   version 2 with proposal P7, written up in `docs/terminal-view.md`. The
